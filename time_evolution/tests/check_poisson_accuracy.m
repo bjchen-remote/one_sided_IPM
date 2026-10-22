@@ -1,0 +1,159 @@
+function report=check_poisson_accuracy(out)
+%CHECK_POISSON_ACCURACY Continuous manufactured solutions for standard main.
+% Keeps main.m's FD7 / separable / 1e-5 and Green 1e-12 / 48000 settings.
+% Tests finite boxes, not the production 1e10 box or its compensated branch.
+assert(nargin==1 && ~isfile(fullfile(out,'report.json')),'ipm:AccuracyOutput');
+if ~isfolder(out),mkdir(out);end
+counts=[33,65,129,257];maps={'uniform','stretched'};
+records={};convergence={};timer=tic;
+for mapIndex=1:numel(maps)
+    errors=zeros(numel(counts),2,3);
+    for level=1:numel(counts)
+        n=counts(level);g=grid_for(n,3,maps{mapIndex});
+        for family=1:2
+            e=analytic(g.X,g.Y,family);
+            boundary=struct('left',e.psi(:,1),'right',e.psi(:,end), ...
+                'bottom',e.psi(1,:),'top',e.psi(end,:));
+            [psi,~,~,info,~,psiLow]=ipm.field.poisson(e.source,g,1,boundary);
+            f=fields_from_psi(psi,psiLow,g);
+            rec=measure(f,e,g,info);
+            sampled=fields_from_psi(e.psi,zeros(size(e.psi)),g);
+            rec.sampledExactPsiVelocityError=max([abs(sampled.u1-e.u1), ...
+                abs(sampled.u2-e.u2)],[],'all');
+            rec.solvedVsSampledExactDerivativeError=max([ ...
+                abs(f.u1-sampled.u1),abs(f.u2-sampled.u2)],[],'all');
+            rec.map=maps{mapIndex};rec.family=family;rec.nx=n;rec.ny=n;
+            rec.exactBoundaryUsed=true;
+            errors(level,family,:)=[rec.psiInfinity,rec.velocityInfinity,rec.velocityL2];
+            records{end+1}=rec; %#ok<AGROW>
+            fprintf('EXACT map=%s family=%d n=%d psi=%.6e u=%.6e residual=%.3e\n', ...
+                maps{mapIndex},family,n,rec.psiInfinity,rec.velocityInfinity,info.relativeResidual);
+        end
+        clear g
+    end
+    for family=1:2
+        e=reshape(errors(:,family,:),numel(counts),3);
+        orders=log2(e(1:end-1,:)./e(2:end,:));
+        convergence{end+1}=struct('map',maps{mapIndex},'family',family, ...
+            'counts',counts,'metrics',{{'psiInfinity','velocityInfinity','velocityL2'}}, ...
+            'errors',e,'observedOrders',orders, ...
+            'finestErrorsDecrease',all(e(end,:)<e(end-1,:))); %#ok<AGROW>
+    end
+end
+green={};
+for level=1:numel(counts)
+    n=counts(level);g=grid_for(n,6,'stretched');
+    for family=1:2
+        e=analytic(g.X,g.Y,family);
+        [u1,u2,psi,~,info,psiLow]=ipm.field.biotSavart(e.source,g);
+        f=struct('psi',psi,'psiLow',psiLow,'u1',u1,'u2',u2);
+        rec=measure(f,e,g,info);rec.family=family;rec.nx=n;rec.ny=n;
+        rec.exactBoundaryUsed=false;
+        rec.boundaryPsiInfinity=max([abs(psi(:,1)-e.psi(:,1)); ...
+            abs(psi(:,end)-e.psi(:,end));abs(psi(end,:)'-e.psi(end,:)')]);
+        q=e.source(2:end-1,2:end-1);
+        rec.retainedSourceCount=nnz(abs(q)>=g.greenSourceTolerance*max(abs(q),[],'all'));
+        rec.sourceCompressionActive=rec.retainedSourceCount>g.greenMaxSources;
+        green{end+1}=rec; %#ok<AGROW>
+        fprintf('GREEN family=%d n=%d psi=%.6e u=%.6e boundary=%.6e\n', ...
+            family,n,rec.psiInfinity,rec.velocityInfinity,rec.boundaryPsiInfinity);
+    end
+    clear g
+end
+% Same finest grid and source, only disable Green source compression.
+% This is a diagnostic control; the production cap above remains 48000.
+n=counts(end);g=grid_for(n,6,'stretched');g.greenMaxSources=1000000;
+compressionControl={};
+for family=1:2
+    e=analytic(g.X,g.Y,family);
+    [u1,u2,psi,~,info,psiLow]=ipm.field.biotSavart(e.source,g);
+    f=struct('psi',psi,'psiLow',psiLow,'u1',u1,'u2',u2);
+    rec=measure(f,e,g,info);rec.family=family;rec.nx=n;rec.ny=n;
+    rec.exactBoundaryUsed=false;rec.diagnosticGreenMaxSources=g.greenMaxSources;
+    rec.boundaryPsiInfinity=max([abs(psi(:,1)-e.psi(:,1)); ...
+        abs(psi(:,end)-e.psi(:,end));abs(psi(end,:)'-e.psi(end,:)')]);
+    q=e.source(2:end-1,2:end-1);
+    rec.retainedSourceCount=nnz(abs(q)>=g.greenSourceTolerance*max(abs(q),[],'all'));
+    rec.sourceCompressionActive=rec.retainedSourceCount>g.greenMaxSources;
+    default=green{2*(numel(counts)-1)+family};
+    rec.defaultCompressedPsiError=default.psiInfinity;
+    rec.defaultCompressedVelocityError=default.velocityInfinity;
+    compressionControl{end+1}=rec; %#ok<AGROW>
+    fprintf('NO_COMPRESSION family=%d n=%d psi=%.6e u=%.6e boundary=%.6e\n', ...
+        family,n,rec.psiInfinity,rec.velocityInfinity,rec.boundaryPsiInfinity);
+end
+clear g
+report=struct('kind','standard_continuous_analytic_poisson_accuracy_v1', ...
+    'completed',true,'counts',counts,'maps',{maps}, ...
+    'equation','-Delta psi=source; u=(-psi_Y,psi_X)', ...
+    'families',{{'psi=Y*exp(-X^2-Y^2)', ...
+    'psi=(Y+.2*X*Y+.3*Y^2+.1*X^2*Y)*exp(-X^2-1.7*Y^2)'}}, ...
+    'records',{records},'convergence',{convergence},'greenScreen',{green}, ...
+    'greenCompressionControl',{compressionControl}, ...
+    'spatialDiscretization','high_order','poissonSolver','separable', ...
+    'poissonTolerance',1e-5,'sourceComputedFromContinuousFormula',true, ...
+    'exactBoundaryBox',[-3,3,0,3],'greenBoundaryBox',[-6,6,0,6], ...
+    'stretchedGridParameter',[2,2],'greenSourceTolerance',1e-12,'greenMaxSources',48000, ...
+    'allNodesIncludedInInfinityNorm',true, ...
+    'infinityDefinition','maximum absolute component over all nodes', ...
+    'l2Definition','quadrature weighted vector RMS normalized by domain area', ...
+    'reportedResidualDefinition','solver relative residual, boundary-adjusted interior RHS normalization', ...
+    'trajectoryAdvanced',false,'productionGridAccuracyCertified',false, ...
+    'compensatedLargeBoxBranchTested',false, ...
+    'resolvedFunctions',struct('grid',which('ipm.mesh.build'),'poisson',which('ipm.field.poisson'), ...
+    'biotSavart',which('ipm.field.biotSavart'),'fdMatrix',which('ipm.mesh.fdMatrix')), ...
+    'seconds',toc(timer));
+fid=fopen(fullfile(out,'report.json'),'w');assert(fid>0);cleanup=onCleanup(@()fclose(fid)); %#ok<NASGU>
+fprintf(fid,'%s',jsonencode(report));
+end
+
+function g=grid_for(n,radius,map)
+o=struct('nx',n,'ny',n,'xlim',[-radius,radius],'ymax',radius, ...
+    'gridMode',map,'gridStretch',[2,2],'gridStretchAutomatic',false, ...
+    'symmetryMode','half_plane','spatialDiscretization','high_order', ...
+    'transportScheme','weno5_fd','anisotropicPoissonSolver','separable', ...
+    'anisotropicPoissonTolerance',1e-5,'farBoundaryMode','green', ...
+    'greenSourceTolerance',1e-12,'greenMaxSources',48000, ...
+    'adaptiveRemesh',false,'makePlots',false,'saveResults',false,'verbose',false);
+g=ipm.mesh.build(ipm.config.resolve(o));
+end
+
+function f=fields_from_psi(psi,psiLow,g)
+% Same velocity reconstruction as biotSavart, with the exact-boundary hook.
+if isfield(g,'compensatedPoisson')
+    [h,l]=ipm.field.compensatedMultiply(g.Dy,psi,psiLow);u1=-(h+l);
+    [h,l]=ipm.field.compensatedMultiply(ipm.mesh.oddDx(g),psi',psiLow');u2=(h+l)';
+else,u1=-g.Dy*psi;u2=psi*ipm.mesh.oddDx(g)';end
+u2(1,:)=0;f=struct('psi',psi,'psiLow',psiLow,'u1',u1,'u2',u2);
+end
+
+function e=analytic(X,Y,family)
+if family==1
+    P=Y;Px=zeros(size(X));Py=ones(size(X));Pxx=Px;Pyy=Px;beta=1;
+else
+    P=Y+.2*X.*Y+.3*Y.^2+.1*X.^2.*Y;
+    Px=.2*Y+.2*X.*Y;Py=1+.2*X+.6*Y+.1*X.^2;
+    Pxx=.2*Y;Pyy=.6*ones(size(X));beta=1.7;
+end
+E=exp(-X.^2-beta*Y.^2);
+e=struct('psi',P.*E,'source',-E.*(Pxx+Pyy-4*(X.*Px+beta*Y.*Py)+ ...
+    (4*X.^2+4*beta^2*Y.^2-2-2*beta).*P), ...
+    'u1',-E.*(Py-2*beta*Y.*P),'u2',E.*(Px-2*X.*P));
+end
+
+function rec=measure(f,e,g,info)
+ep=(f.psi-e.psi)+f.psiLow;eu1=f.u1-e.u1;eu2=f.u2-e.u2;
+[uerr,idx]=max(max(abs(eu1),abs(eu2)),[],'all','linear');
+[i,j]=ind2sub(size(ep),idx);w=g.integrationWeights;
+rec=struct('psiInfinity',max(abs(ep),[],'all'), ...
+    'psiL2',sqrt(sum(w.*ep.^2,'all')/sum(w,'all')), ...
+    'velocityInfinity',uerr,'u1Infinity',max(abs(eu1),[],'all'), ...
+    'u2Infinity',max(abs(eu2),[],'all'), ...
+    'velocityL2',sqrt(sum(w.*(eu1.^2+eu2.^2),'all')/sum(w,'all')), ...
+    'wallVelocityInfinity',max([abs(eu1(1,:)),abs(eu2(1,:))]), ...
+    'velocityErrorLocation',struct('row',i,'column',j,'X',g.X(i,j),'Y',g.Y(i,j)), ...
+    'sourceInfinity',max(abs(e.source),[],'all'), ...
+    'wallSourceInfinity',max(abs(e.source(1,:))), ...
+    'exactPsiInfinity',max(abs(e.psi),[],'all'), ...
+    'exactVelocityInfinity',max([abs(e.u1),abs(e.u2)],[],'all'),'poisson',info);
+end

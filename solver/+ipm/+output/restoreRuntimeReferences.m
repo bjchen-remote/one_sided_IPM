@@ -1,0 +1,56 @@
+function rescaling = restoreRuntimeReferences(fresh,saved,x,enabled)
+%IPM.OUTPUT.RESTORERUNTIMEREFERENCES Restore only frozen run references.
+%   Configuration-derived rescaling controls always remain those produced
+%   by the freshly resolved configuration and freshly built operators.
+
+if ~isstruct(fresh) || ~isscalar(fresh) || ...
+        ~isstruct(saved) || ~isscalar(saved)
+    error('ipm:CheckpointRescaling', ...
+        'Fresh and stored rescaling settings must be scalar structures.');
+end
+if ~islogical(enabled) || ~isscalar(enabled)
+    error('ipm:CheckpointRescaling', ...
+        'The fresh rescaling enabled flag must be a logical scalar.');
+end
+validateattributes(x,{'numeric'},{'vector','real','finite','increasing'}, ...
+    mfilename,'x');
+rescaling = fresh;
+rescaling.enabled = enabled;
+
+% This is deliberately an explicit allowlist. Adding a normalization that
+% needs restart persistence requires a checkpoint-contract review here.
+referenceNames = {'pinX','strainTarget','referenceAnchorWallSlope', ...
+    'referenceAnchorWallWindowValue', ...
+    'referenceOuterWallDensityWindowValue', ...
+    'referenceAnchorWallTemplate', ...
+    'referenceAnchorWallTemplateProjection', ...
+    'referenceAnchorBulkGradientL2','referencePeakPoints', ...
+    'referenceLevelPoints','referenceVerticalPeakPoints', ...
+    'referenceVerticalLevelPoints','adaptiveTargetPeakPoints', ...
+    'adaptiveTargetLevelPoints','adaptiveTargetVerticalPeakPoints', ...
+    'adaptiveTargetVerticalLevelPoints','safetyPeakPoints', ...
+    'safetyLevelPoints','safetyVerticalPeakPoints', ...
+    'safetyVerticalLevelPoints','peakTrackingHalfWidth'};
+for index = 1:numel(referenceNames)
+    name = referenceNames{index};
+    if isfield(saved,name)
+        rescaling.(name) = saved.(name);
+    end
+end
+
+% Indices are properties of the current axis, not frozen configuration or
+% portable reference data. Recompute them from the restored locations.
+if isfield(rescaling,'pinX')
+    [~,rescaling.pinIndex] = min(abs(x-rescaling.pinX));
+elseif enabled || isfield(saved,'pinIndex')
+    error('ipm:CheckpointRescaling', ...
+        'A restored pin index requires a stored pinX reference.');
+end
+if enabled
+    if ~isfield(rescaling,'strainTarget')
+        error('ipm:CheckpointRescaling', ...
+            'Dynamic rescaling requires a stored strainTarget reference.');
+    end
+    [~,rescaling.originIndex] = min(abs(x));
+end
+end

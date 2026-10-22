@@ -1,0 +1,835 @@
+\documentclass[UTF8,fontset=fandol,11pt,a4paper]{ctexart}
+\usepackage[margin=24mm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,longtable}
+\usepackage[unicode,colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\usepackage{fancyvrb}
+\setlength{\parskip}{0.3em}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.15}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\dd}{\,\mathrm d}
+\newcommand{\Dx}{D_X}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\R}{\mathbb R}
+\title{张量核心与极坐标外域的高精度 IPM 求解\\
+  \large 算法、网格连接与可恢复计算报告}
+\author{\code{test/+ipm_cr}}
+\date{2026 年 10 月 22 日}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+本报告说明当前混合网格求解器的数学表示、空间离散、独立谱
+Poisson 求解、原始规范条件与显式时间推进。均匀张量核心移除极坐标原点
+对时间步长的限制，正半径环带覆盖外域；两块输运活动区独立演化，只交换
+代数 ghost。Gaussian 解析背景与物理时间主尾从密度中精确拆出，以减少大平台、
+相消及远区粗网格造成的误差。针对 $\tau=10$ 主体移动至 $r\approx50$--$150$
+后出现的径向欠分辨率，采用固定、平滑、保护内环的径向重分配。
+
+三层原初值计算在同一组 $15975$ 个物理查询上得到
+$W,q,F,Q,u_2$ 的自收敛观测阶分别为
+$4.577,4.714,4.479,4.00569,4.078$。各层接受步数与原网格完全相同，
+中层计算耗时由 $213.99$ 秒增至 $260.30$ 秒。该结果支持本次局部问题修复；
+有限采样三层自差、中层时间控制和固定末态 Poisson 加密，仍不足以证明连续
+全域四阶、最细网格时间误差、当前算法的 $200\tau$ 精度或 50 分钟目标。
+\end{abstract}
+\tableofcontents
+
+\clearpage
+\section{连续问题、坐标与状态}
+\subsection{物理问题与符号}
+物理坐标记为 $(x,y)$，$y\ge0$；物理时间为 $t$。沿用维护版的符号：
+\begin{equation}
+ \rho_t+u^{\rm phys}\cdot\nabla_{x,y}\rho=0,\qquad
+ -\Delta_{x,y}\psi^{\rm phys}=\rho_x,\qquad
+ u^{\rm phys}=(-\psi^{\rm phys}_y,\psi^{\rm phys}_x).
+ \label{eq:physical}
+\end{equation}
+物理墙 $y=0$ 上 $\psi^{\rm phys}=0$，因此法向速度为零；
+墙源 $\rho_x$ 并不要求为零。Gaussian primitive 初值在正向远墙具有密度平台，
+不能把密度本身当作紧支撑量。有限计算外弧的闭合及源尾影响须单独审计。
+
+定义 $L=e^\ell>0$、$M=e^\omega>0$ 和平移量 $S$，使用
+\begin{equation}
+ (x,y)=((X-S)/L,Y/L),\qquad R(X,Y,\tau)=M\rho(x,y,t),
+ \qquad \frac{\dd t}{\dd\tau}=\frac ML.
+ \label{eq:transform}
+\end{equation}
+这里 $\tau$ 是规范时间，$X,Y$ 是规范坐标。定义规范速度
+$u=M u^{\rm phys}$；相应流函数为 $\psi=ML\psi^{\rm phys}$。于是
+\begin{equation}
+ -\Delta_{X,Y}\psi=q=R_X,\quad u=(-\psi_Y,\psi_X),\quad
+ R_\tau=-v\cdot\nabla R+c_\omega R,
+ \quad v=(u_1+c_lX+c_r,u_2+c_lY).
+ \label{eq:canonical}
+\end{equation}
+链式法则要求 $\ell'=c_l,\ \omega'=c_\omega,\ S'=c_lS+c_r$；
+三个规范速率由第 \ref{sec:gauge} 节的原 I/P/C 条件决定，
+不是预设的相似指数。
+
+\subsection{中心化与持久化未知量}
+将原点密度单独保存：
+\begin{equation}
+ a(\tau)=R(0,0,\tau),\qquad W=R-a,\qquad W(0,0)=0.
+\end{equation}
+令 $B=-v\cdot\nabla W$、$B_0=B(0,0)$，则
+\begin{equation}
+ W_\tau=B+c_\omega W-B_0,\qquad
+ a'=B_0+c_\omega a.
+ \label{eq:center}
+\end{equation}
+源码中的 \code{flow.transportOrigin} 即 $B_0$；
+\code{state.rho} 保存的是 $W$，不是 $\rho$、$R$ 或余项 $\eta$。
+开启背景拆分时，真正积分的两块数组另存于 \code{state.residual}。
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+对象 & 保存或返回的意义 & 是否随阶段改变\\
+\midrule
+\code{rho.core/polar} & 完整中心化密度 $W$ & 是\\
+\code{residual.core/polar} & 背景外余项 $\eta$ & 是\\
+\code{flow.q}, \code{flow.F}, \code{flow.Q} & $W_X,\ W_\tau,\ (W_\tau)_X$ & 是\\
+\code{scale} & $\ell,\omega,S,t,t_{\rm low},a,\tau$ & 是\\
+\code{geometry}, 分解与映射 & 固定网格及线性算子 & 否\\
+原初值 authority 与墙参考 & 原 I/P/C 的定义身份 & 否\\
+\bottomrule
+\end{tabular}
+\end{center}
+中心化解决的是常数污染问题；它并不自动消除全部离散误差。
+接口插值、差分及迎风重构还需按局部差值形式实现。
+
+\clearpage
+\section{解析背景与物理主尾的提取}
+\subsection{Gaussian primitive 与解析源}
+记初值模型参数为 $A_0,x_c,s_x,s_y,w$。当前实验使用
+$(0.7,0,0.75,1,0.2)$。令
+\[
+ (w_0,w_1)=(1-w,w),\quad (d_0,d_1)=(0,0.8),\quad
+ (b_0,b_1)=(1,1.25),\quad
+ z_k=\frac{(x-x_c)/s_x-d_k}{b_k}.
+\]
+原始初值及其导数为
+\begin{align}
+ \rho_0(x,y)
+ &=\frac{A_0s_x\sqrt\pi}{2}e^{-(y/s_y)^2}
+       \sum_{k=0}^1 w_k\,\operatorname{erfc}(-z_k),\\
+ (\rho_0)_x(x,y)
+ &=A_0e^{-(y/s_y)^2}
+       \sum_{k=0}^1 \frac{w_k}{b_k}e^{-z_k^2}.
+ \label{eq:gaussian}
+\end{align}
+初始 authority 确定原规范参考和尺度；新输运网格直接采样原始解析密度，
+不把旧离散轨道插值后当作新的初值。
+
+\subsection{主尾系数的来源}
+对初始源 $q_0=(\rho_0)_x$，其垂直一阶矩可解析积分：
+\begin{equation}
+ M_y=\int_0^\infty\!\int_{\R}yq_0(x,y)\dd x\dd y
+     =\frac{A_0s_xs_y^2\sqrt\pi}{2},\qquad
+ C=\frac{M_y}{\pi}=\frac{A_0s_xs_y^2}{2\sqrt\pi}.
+\end{equation}
+上半平面 Dirichlet Green 函数的远区展开给出：固定物理 $y$，
+当 $x\to+\infty$ 时，$\psi_0\sim Cy/x^2$、
+$(u_0)_2\sim-2Cy/x^3$。由于
+$(\rho_0)_y=-2y\rho_0/s_y^2$，初始物理输运的主尾为
+\[
+ -u_0\cdot\nabla\rho_0
+ \sim-\frac{4C}{s_y^2}\frac{y^2\rho_0}{x^3}.
+\]
+因此构造全域光滑的解析 enrichment
+\begin{equation}
+ A(x,y)=-\frac{2A_0s_x}{\sqrt\pi}
+       \frac{x\,y^2\rho_0(x,y)}{(1+x^2+y^2)^2}.
+ \label{eq:tail}
+\end{equation}
+它匹配上述初始 $x^{-3}$ 系数，且 $A=A_x=0$ 于墙上。
+分母中的 $1$ 仅负责内域正则化；$A$ 不是完整的初始输运 RHS。
+独立尾项测试使用矩积分、Green 积分及半径扫描检验此系数。
+
+\subsection{精确变量拆分及其适用边界}
+在每个 RK 阶段，以当前尺度定义
+\begin{equation}
+ G=M[\rho_0(x,y)+tA(x,y)],\qquad
+ H=G-G(0,0),\qquad W=\eta+H.
+ \label{eq:background}
+\end{equation}
+初始化时 $t=0,\eta=0$。这是一种表示变换，余项仍按完整方程推进；
+没有把尾外的物理变化冻结。它也没有指定最终规范稳态的尾形。
+有限时间余项可能包含更高次尾、内域非线性变化及中心化产生的常量。
+
+实现解析求出 $H,G_X,G_Y,G_{XX},G_{XY}$。
+Gaussian 增量用独立坐标增量、\code{expm1}、\code{erfcx}
+及组合对数，避免直接作两个大 $G$ 的减法。主尾的尺度、坐标幂及有理因子
+采用普通范围快路径和例外组合对数路径；不声称能恢复任意已经在 Gaussian
+primitive 内下溢、随后又被巨大尺度放大的乘积。
+物理时钟按 $t_{\rm high},t_{\rm low}$ 分别乘主尾，避免先相加丢失低位。
+
+\clearpage
+\section{背景导数与完整 RHS 的一致性}
+\subsection{时间依赖项只计入一次}
+尾项显式依赖物理时间。记
+\begin{equation}
+ E=M\,t'A(x,y),\qquad E_X=\partial_XE,\qquad t'=e^{\omega-\ell}.
+ \label{eq:explicit-time}
+\end{equation}
+源码 \code{timeH/timeX} 已包含 $t'$，调用者不得再乘一次。
+利用 $A(0,0)=0$ 及坐标变换，可得
+\begin{align}
+ H_\tau={}&-(c_lX+c_r)G_X-c_lYG_Y+c_\omega H
+              +c_rG_X(0,0)+E, \label{eq:Ht}\\
+ H_{\tau X}={}&(c_\omega-c_l)G_X
+       -(c_lX+c_r)G_{XX}-c_lYG_{XY}+E_X.
+ \label{eq:Htx}
+\end{align}
+这些导数对应同一阶段的尺度与时钟，不使用上一阶段背景。
+
+\subsection{实际积分的余项}
+令 $\mathcal T_h(\eta;v)$ 是生产迎风离散对 $-v\cdot\nabla\eta$ 的近似。
+定义
+\begin{equation}
+ T=\mathcal T_h(\eta;v)-u\cdot\nabla G,\qquad T_0=T(0,0).
+\end{equation}
+则当前代码积分
+\begin{equation}
+ \eta_\tau=T+c_\omega\eta-T_0-E.
+ \label{eq:eta-rhs}
+\end{equation}
+重建源与派生量：
+\begin{equation}
+ q=\Dx\eta+G_X,\qquad
+ F=\eta_\tau+H_\tau,\qquad
+ Q=\Dx\eta_\tau+H_{\tau X}.
+ \label{eq:observables}
+\end{equation}
+完整未中心化原点输运为
+$B_0=T_0-c_rG_X(0,0)$，与式 \eqref{eq:center} 一致。
+式 \eqref{eq:eta-rhs} 中减去的 $E$ 在式 \eqref{eq:Ht} 中加回，
+保证变量变换没有额外改变完整 RHS；活动区的等价性另有测试。
+ghost 的 RHS 由活动 donor 插值产生，不要求整个含 ghost 数组逐位抵消。
+
+\subsection{一次 RHS 的依赖次序}
+\begin{enumerate}
+ \item 从另一块的旧活动 $\eta$ 同时更新 ghost，重建当前 $W=\eta+H$。
+ \item 物理坐标差分得到 $\Dx\eta$，同步其 ghost；
+       在谱节点上直接加入解析 $G_X$。
+ \item 严格求解 $-\Delta\psi=q$，返回同一谱解的两方向速度导数。
+ \item 在原始墙节点测量完整 $W$，计算
+       $U_{\rm ref}=u_1(C,0)$，求规范速率。
+ \item 用实际净速度计算 $T,\eta_\tau,F$ 和完整 CFL；
+       从实际组装的 $F$ 再审计 I/P/C 变化率。
+ \item 接受末态计算 $Q$ 及完整展示诊断，内部阶段可省去 $Q$ 和
+       展示用 $\psi$，但仍执行源、速度、规范、完整 $F$ 审计与 CFL。
+\end{enumerate}
+此顺序避免以解析背景替代完整物理速度。Poisson 始终保留背景源的 Darcy 作用，
+没有源裁剪、远场掩码或背景速度置零。
+
+\clearpage
+\section{固定混合输运网格与径向重分配}
+\subsection{张量核心、正半径环带与所有权}
+核心原生数组按行 $Y$、列 $X$ 存储，完整矩形为
+$[-1.2,1.2]\times[0,1.2]$，使用均匀间距 $h$。
+左右及顶部三层为 ghost；物理墙一行保持活动。
+极坐标数组按行 $r$、列 $\theta$，$\theta\in[0,\pi]$。
+环带从首个 $r\ge0.72$ 的真实映射节点开始，向内前三行是 ghost，
+故极坐标原点不参与输运或 CFL。
+
+两块活动区有正宽度重叠，均独立推进。只有 ghost 被覆盖，活动区不投影、
+不平均。向谱节点或外部查询重构场时，活动核心矩形内采用唯一核心所有权，
+其他位置采用环带；物理源没有因重叠计算两遍。
+
+\subsection{旧轴与保护前缀}
+基准 \code{uniform_core} 径向连续轴写为
+\begin{equation}
+ r=\mathcal R(s)=as+B
+ \left(\frac{\sinh(\alpha s)}{\sinh\alpha}\right)^3,\qquad
+ 0\le s\le1,\quad B=R_{\max}-a,
+ \label{eq:baseaxis}
+\end{equation}
+其中参数由维护版网格构造确定；$\alpha=0$ 使用极限 $s^3$。
+旧轴整数索引为 $u=Ns,\ N=n_r^{\rm base}-1$。
+单纯把整个 $n_r$ 加倍会同时收紧 $r\approx2.4$ 处的径向 CFL，
+还改变三层 halo 的物理厚度，不适合孤立修复远区主体欠分辨率。
+
+新网格指定保护半径 $r_a=4$、完全加密半径 $r_b=20$。
+令 $\mathcal R(u_a/N)=r_a$、$\mathcal R(u_b/N)=r_b$，其中
+$u_a,u_b$ 使用连续轴反解，不先对节点取整。
+监测函数为常值延拓的 BetaCDF：
+\begin{equation}
+ \chi(u)=
+ \begin{cases}
+ 0,&u\le u_a,\\
+ I_z(8,8),\quad z=(u-u_a)/(u_b-u_a),&u_a<u<u_b,\\
+ 1,&u\ge u_b.
+ \end{cases}
+\end{equation}
+由 $\chi'(z)\propto z^7(1-z)^7$，延拓后的 $\chi$ 为 $C^7$。
+积分 $\mathcal I(u)=\int_0^u\chi(v)\dd v$ 有闭式
+\begin{equation}
+ \mathcal I(u)=
+ \begin{cases}
+ 0,&u\le u_a,\\
+ (u_b-u_a)\{zI_z(8,8)-\tfrac12I_z(9,8)\},&u_a<u<u_b,\\
+ u-\tfrac12(u_a+u_b),&u\ge u_b.
+ \end{cases}
+ \label{eq:cdf-integral}
+\end{equation}
+
+\subsection{整数节点、逆映射与度量}
+给定目标外侧密度倍率 $f$，设置
+\begin{equation}
+ K=\operatorname{round}[(f-1)\mathcal I(N)],\quad
+ c=K/\mathcal I(N),\quad
+ j(u)=u+c\mathcal I(u).
+ \label{eq:indexmap}
+\end{equation}
+新区间数为 $N+K$。对整数 $j=0,\ldots,N+K$ 反解 $u_j$，
+再置 $r_j=\mathcal R(u_j/N)$。
+因为 $j'(u)=1+c\chi(u)>0$，映射及逆映射均为 $C^8$；
+实际外区密度倍率为 $1+c$，与请求 $f$ 存在整数取整差。
+受保护整数节点直接复制旧坐标，完整位于保护前缀内的七点度量模板也直接复制，
+保证本次新旧配对比较中的核心、halo 和连接 donor 不变。
+
+其他行在新整数索引上用七点差分计算
+$\Delta r_{{\rm metric},j}=D_jr$。截取实际环带后，若节点数为 $n_r$，
+则规范逻辑轴间距与 Jacobian 统一定义为
+\begin{equation}
+ h_\xi=\frac1{n_r-1},\qquad
+ J_{r,j}=(n_r-1)\Delta r_{{\rm metric},j},\qquad
+ \partial_r=J_r^{-1}\partial_\xi.
+ \label{eq:metric}
+\end{equation}
+不能用基准请求 $n_r^{\rm base}$ 代替实际 $n_r$。
+整个轨道的网格固定；没有 ALE、隐式推进或含时插值重网格。
+
+\clearpage
+\section{高精度连接与常数保持}
+\subsection{活动 donor 的同时交换}
+每个目标 ghost 只从另一块的活动轴取局部七点张量 Lagrange 插值，
+每行最多 $7^2=49$ 个 donor。若 $E_{cp},E_{pc}$ 是两方向映射，则
+\[
+ \widehat\eta_{c,g}=E_{cp}\eta_{p,a},\qquad
+ \widehat\eta_{p,g}=E_{pc}\eta_{c,a}.
+\]
+先计算两份候选，再同时提交。若按顺序更新后读取新 ghost，会产生与调用次序
+相关的算子；当前实现通过活动 donor 契约排除这一问题。
+
+令插值行权重为 $w_j$，选其绝对值最大的 donor 为锚 $f_*$，实际计算
+\begin{equation}
+ \mathcal P_hf(q)=f_*+\sum_jw_j(f_j-f_*).
+ \label{eq:constant-interpolation}
+\end{equation}
+常数输入的差值严格为零，不会被浮点行和偏离 $1$ 放大。
+历史只读检查点若没有局部差值计划，保留其原矩阵解释；维护版不能悄然重写
+历史实验的离散算子。
+
+\subsection{物理差分与指标转换}
+核心使用真实均匀轴上的七点一阶差分。环带的
+$D_r,D_\theta$ 由真实物理轴构造，因而
+\begin{equation}
+ D_Xf=\cos\theta\,D_rf-\frac{\sin\theta}{r}D_\theta f,\qquad
+ D_Yf=\sin\theta\,D_rf+\frac{\cos\theta}{r}D_\theta f.
+ \label{eq:physical-difference}
+\end{equation}
+这里 $D_r$ 已按实际 $r$ 差分，不能再除一次 $J_r$。
+相反，生产输运的径向迎风导数先在均匀逻辑 $\xi$ 上形成，必须按
+式 \eqref{eq:metric} 除以 $J_r$。
+
+所有一阶差分按
+\begin{equation}
+ (D_hf)_i=\sum_jd_{ij}(f_j-f_i)
+ \label{eq:constant-difference}
+\end{equation}
+计算，使常数平台先消去。七点局部多项式导数在足够光滑、规则加密的轴上
+具有六阶一致性；七点张量值插值具有七阶局部一致性。
+接口上插值误差再经导数会降低一阶，因此需保留高于主输运格式的连接阶数。
+这些局部阶数不构成重复交换后的全轨道稳定性证明。
+
+\subsection{连接方法的验收层级}
+\begin{center}
+\begin{tabular}{p{0.20\linewidth}p{0.70\linewidth}}
+\toprule
+层级 & 检查对象及其能回答的问题\\
+\midrule
+几何与代数 & donor 全为活动值；覆盖、正间距、保护节点、度量及所有权正确；
+常数与多项式矩检查通过。\\
+局部算子 & 制造场上的插值、物理导数与生产输运误差；比较
+$D_X(\mathcal Sf)$ 与 $\mathcal S(D_Xf)$ 时分别报告活动与 ghost。\\
+非局部链 & 制造源、Poisson、谱速度返回、规范及完整 RHS 的联合敏感性。\\
+真实轨道 & 相同原初值、相同物理查询、空间加密、时间控制和谱/外半径控制。\\
+\bottomrule
+\end{tabular}
+\end{center}
+同步后的 ghost 天然接近 donor 插值，因此其吻合不能代替活动重叠误差。
+\code{audit.m} 从两块活动值分别重构独立非节点公共查询，
+保留 $W,q,F,Q,u$ 的双侧差异。源与返回映射还须记录插值权重范数，
+以识别几何外推或条件恶化。
+
+\clearpage
+\section{生产输运与原 I/P/C 规范}
+\label{sec:gauge}
+\subsection{五阶迎风与平滑速度}
+默认 \code{linear5} 使用固定最优权重，对均匀单轴定义
+\begin{align}
+ D^+f_i&=\frac{-2f_{i-3}+15f_{i-2}-60f_{i-1}
+              +20f_i+30f_{i+1}-3f_{i+2}}{60h},\\
+ D^-f_i&=\frac{3f_{i-2}-30f_{i-1}-20f_i
+              +60f_{i+1}-15f_{i+2}+2f_{i+3}}{60h}.
+\end{align}
+内核实际先减公共参考值，再求上述组合。对净速度 $v$，采用
+\begin{equation}
+ \mathcal A_h(f;v)=
+ -\frac12\{v(D^+f+D^-f)+\alpha(D^+f-D^-f)\},\qquad
+ \alpha=\sqrt{v^2+\sigma^2},\quad \sigma=\nu h_{\rm core},\ \nu=0.1.
+ \label{eq:lf}
+\end{equation}
+环带采用 $v_r$ 和 $v_\theta/r$，相应角向平滑速度为 $\sigma/r$；
+物理墙法向项精确置零。实际 $\alpha$ 进入完整 CFL，没有小速度豁免。
+有限外端用五次外侧延拓闭合，不能据此认定域外入流数据精确。
+
+\code{smooth_weno5} 使用平滑归一化 WENO-Z；
+\code{legacy_weno5} 保留兼容路径。选择前两种新模式而兼容 MEX 缺失时停止，
+不静默替换格式。构建记录包含 API、编译选项与源码/二进制 SHA；
+严格浮点编译关闭 fast-math 和浮点收缩。
+
+\subsection{原始墙观测量的离散定义}
+保持 authority 中固定的原墙节点 $x_i$、原差分 $D_x^{\rm wall}$、
+积分半径 $L_I$、参考 $I_{\rm ref},C_{\rm ref}$。
+先把完整 $W$ 重构到原墙节点，再形成
+$q^w=D_x^{\rm wall}W^w$，而不是用当前极坐标墙源重新定义规范。
+\begin{align}
+ I&=\sum_i\beta_iq^w_i,
+ &&\beta_i\text{ 精确积分 }[-L_I,L_I]\text{ 上的分片线性插值},\\
+ P&=\max_{x\in[x_1,x_n]}\mathcal S_{\rm nat}[q^w](x),
+ &&\mathcal S_{\rm nat}\text{ 为全窗口自然三次样条},\\
+ C&=\frac{\sum_j\gamma_jz_j\widetilde q_j^{\,2}}
+          {\sum_j\gamma_j\widetilde q_j^{\,2}},
+ &&z_j\text{ 含裁剪端点，}\widetilde q=B_wq^w,\ \gamma_j>0.
+ \label{eq:IPC}
+\end{align}
+$C$ 的 $\gamma_j$ 是端点裁剪后的梯形权重；它是离散平方梯度重心。
+其精确离散变化率为
+\begin{equation}
+ \dot C=\frac{2\sum_j\gamma_j(z_j-C)\widetilde q_j\dot{\widetilde q}_j}
+                   {\sum_j\gamma_j\widetilde q_j^{\,2}}.
+\end{equation}
+固定节点、积分窗口和原参考不随新混合网格重新归一化。
+
+样条峰值在所有节点、端点及实驻点中选择。实现先对
+$q^w-\max_iq^w_i$ 求同一个自然样条最大值，再加回锚值；
+常数平移不改变数学 $P$，却避免大峰值尺度的数值近等高带形成位置平台。
+峰变化率使用同一选中峰的线性评价权重。峰非唯一时，
+最大值泛函的导数可能不唯一，不能解释为全局光滑。
+
+\subsection{二维求根与独立真实 RHS 审计}
+使用 $\delta=c_r+U_{\rm ref}$，$U_{\rm ref}=u_1(C,0)$。
+对固定密度和物理速度，设不含 $c_\omega W$ 的基 RHS 的规范变化率为
+$(b_I,b_P,b_C)=(\dot I/I,\dot P/P,\dot C)$。
+因为 $I,P$ 对振幅齐次一次、$C$ 为零次，消去 $c_\omega$：
+\begin{equation}
+ \begin{pmatrix}b_I-b_P\\b_C+\kappa(C-C_{\rm ref})\end{pmatrix}=0,\qquad
+ c_\omega=-b_P,\quad c_r=\delta-U_{\rm ref}.
+ \label{eq:gauge-root}
+\end{equation}
+Newton 在同一密度重构上使用分裂速度对 $(c_l,\delta)$ 的解析 Jacobian，
+暖启动并线搜索。若快路径失败，维护版求解器仅供新种子，
+随后仍用当前同一观测泛函求根。
+目标残差为 $16\eps$；停滞且残差 $\le2\times10^{-12}$ 时允许显式记录的
+有界例外。最终按实际同步组装 $F$ 独立审计规范，不能用求根器残差替代。
+
+\clearpage
+\section{独立谱 Poisson 与直接 Schur 连接}
+\subsection{输运网格与椭圆网格分离}
+谱核心采用张量 Chebyshev 配点；环带以 $s=\log r$ 分片，
+各片使用 Chebyshev 配点，角向也使用 Chebyshev 离散。
+谱节点的端点聚集不进入输运 CFL。适配器仅把
+$\Dx\eta$ 从唯一活动 owner 映射至谱节点，解析 $G_X$ 直接在谱节点计算。
+速度返回从同一个谱流函数插值并解析微分，避免分别拟合两份速度。
+
+核心内部的离散方程为 Sylvester 型
+\begin{equation}
+ A_Y\Psi+\Psi A_X^T=Q_{\rm int}-Q_{\rm boundary},\qquad
+ A_X=-D_{XX}|_{\rm int},\ A_Y=-D_{YY}|_{\rm int}.
+\end{equation}
+缓存一维特征分解后，以模态逐项除以 $\lambda_Y+\lambda_X$ 求解，
+不构造完整二维稠密 LU。
+
+环带方程为
+\begin{equation}
+ -\psi_{ss}-\psi_{\theta\theta}=r^2q.
+\end{equation}
+角向对实际配点算子 $-D_{\theta\theta}$ 的内部矩阵求特征对
+$(V,\mu_k)$，每个模式求解
+$(-D_{ss}+\mu_k)\widehat\psi_k=\widehat{r^2q}_k$。
+径向面板共用端点值，公共端点的 PDE 行替换为 $\psi_s$ 连续行；
+同半径上这也保证 $\psi_r$ 连续。各模式缓存行缩放稀疏 LU。
+
+默认外弧使用离散无源 DtN：
+\begin{equation}
+ \partial_s\widehat\psi_k+\sqrt{\mu_k}\widehat\psi_k=0
+ \quad(r=R_{\max}).
+ \label{eq:dtn}
+\end{equation}
+它是给定角离散算子的闭合，不证明域外源可忽略。
+\code{outerSourceTailCertified=false} 始终保留；显式 Dirichlet 模式须给外弧值。
+
+\subsection{一次构建、多次负载更新}
+以环带内弧 trace $\lambda$ 为未知。
+先求零内弧的外域特解，再用其核心人工边界 trace 求核心特解，
+所得核心内弧值记为 $b$。
+单位内弧 trace 经环带齐次响应、核心边界映射、核心齐次响应再回到内弧，
+形成矩阵 $T$。相容条件为
+\begin{equation}
+ \lambda=b+T\lambda,\qquad (I-T)\lambda=b.
+ \label{eq:schur}
+\end{equation}
+缓存 $I-T$ 的小型 LU、核心齐次响应全场及外域齐次模式。
+每次 RHS 仅更新源特解和 Schur 负载，用线性叠加重建最终场。
+若叠加后的原方程分量后向误差未过原门限，立即回退原直接核心/环带求解，
+必要时在同一原离散方程上迭代精化；没有放宽门限。
+
+\subsection{验收与缓存失效}
+每次严格求解检查：原离散系统分量后向误差、
+Schur 与实际 trace 残差、独立重叠点的 $\psi$、速度和法向导数差。
+默认门限分别为 $10^{-10}$、$10^{-10}$、$10^{-7}$、
+$10^{-6}$；连续源离网格强残差门限为 $10^{-5}$。
+后两类重叠误差使用 $\max(1,\text{场尺度})$ 的混合绝对/相对归一化，
+同时保留物理绝对误差。
+
+仅当具有独立连续源回调时，强残差才有真值可比。
+演化中的残差数组源即使加上解析背景，也没有完整连续源真值，
+故强残差为不可用值，不能写成零。小线性残差也不能认证源插值准确。
+
+几何分解、源映射、谱导数返回映射及原墙查询映射分层缓存。
+几何或数值选项改变则重建；单 RHS 的密度/规范重构闭包不跨状态缓存。
+\code{reconfigure} 先构造并验证新对象，再提交；失败保留旧几何，
+新几何拒绝旧解身份。
+
+\clearpage
+\section{显式 RK4、完整 CFL 与可靠计算}
+\subsection{数组与全部尺度使用同一 tableau}
+令 $z=(\eta,\ell,\omega,S,t,a)$。经典 RK4 为
+\begin{equation}
+ k_1=\mathcal F(z_n),\quad
+ k_2=\mathcal F(z_n+\tfrac h2k_1),\quad
+ k_3=\mathcal F(z_n+\tfrac h2k_2),\quad
+ k_4=\mathcal F(z_n+hk_3),\quad
+ z_{n+1}=z_n+\tfrac h6(k_1+2k_2+2k_3+k_4).
+\end{equation}
+其中标量 RHS 为
+\begin{equation}
+ \ell'=c_l,\quad\omega'=c_\omega,\quad
+ S'=c_lS+c_r,\quad t'=e^{\omega-\ell},\quad
+ a'=B_0+c_\omega a.
+\end{equation}
+正物理时钟增量用同一 RK 权重求和，最后补偿累加到
+$t_{\rm high},t_{\rm low}$。接受初始 RHS 复用；
+每步还求新末态完整 RHS，供下一步复用。
+RK4 没有 SSP 保证；保留的 \code{ssprk3} 是显式选择的历史格式。
+
+\subsection{每个阶段的约束都有效}
+对于当前实际净速度，定义
+\begin{equation}
+ \Lambda=\max_{\substack{\text{两块全部}\\\text{活动节点}}}
+ \left\{
+ \frac{\alpha_X}{h_X}+\frac{\alpha_Y}{h_Y},\
+ \frac{\alpha_r}{\Delta r_{\rm metric}}+
+             \frac{\alpha_{\theta/r}}{\Delta\theta}
+ \right\}+|c_\omega|.
+ \label{eq:cfl}
+\end{equation}
+第二项中的 $\alpha_{\theta/r}=\sqrt{(v_\theta/r)^2+(\sigma/r)^2}$；
+墙法向项为零。活动重叠区也纳入最大值，只有代数 ghost 排除。
+步长预测保留 $5\%$ 余量；初始、三个内部阶段与新末态均要求
+$h\Lambda\le\mathrm{CFL}$，仅允许局部浮点比较容差。
+超限回滚，以实测最大率缩步重算。可恢复的规范/Poisson/尺度失败同样重试；
+达到最小步长或重试上限则保存诊断并停止。
+没有隐式阶段、超 CFL 步或未计入平滑速度的隐藏限制。
+
+\subsection{峰值事件}
+全局样条峰跨原始样条节点时，规范 RHS 的高阶光滑性可能改变。
+RK4 探测发现跨节点后，始终从同一接受态计算真实 RK4 子步末态，
+用保护割线/二分定位峰到节点的时刻，再提交该分步。
+内部阶段越界但末态不包围事件时采用保护缩步。
+所有探测继续执行完整 CFL，不投影峰位置、不修改密度。
+无法连续定位的事件停止并留证；峰非唯一性作为诊断记录，
+不据此假定 RHS 光滑，也不伪造连续根。
+
+\subsection{接受态事务与资源边界}
+单个输出目录由所有权锁保护。只有完成数值验收的状态可写入接受检查点。
+双槽 \code{accepted_0/1.mat} 交替保存，读回校验结构及 SHA 后，
+才原子替换 \code{latest.json}。失败快照与日志另存，不能成为恢复指针。
+恢复核对源码清单、authority 和完整数值选项；几何缓存可重建，
+$\eta$、背景参数及物理时钟高低部分不可省略。
+
+Python 管理器先冻结源码、配置和原始 authority，再监督同一 MATLAB 入口。
+它记录分段状态、RSS、磁盘、截止时间与线程；正常预算停止与失败、达到目标分开。
+当前本地管理器单线程、RSS 上限 $2$\,GiB、剩余磁盘至少 $8$\,GiB，
+每段前可用内存至少 $1$\,GiB。统计同时区分 MATLAB 内部累计耗时和含进程启停的
+监督段耗时。当前整理本身不启动新长轨道。
+
+\clearpage
+\section{问题定位、修复与 $\tau=10$ 实测}
+\subsection{为何选择主体环带加密}
+原三层结果在近区和接口已有约 $4.5$--$5$ 阶，但全域 $q,F,Q,u_2$ 分别只有
+$3.23,2.94,2.43,2.81$ 阶。最大误差集中于
+$r\approx70$--$125$，沿径向有变号波瓣，角向相对光滑。
+该区域映回原 Gaussian 坐标仍是主体，不能把它笼统视为渐近尾。
+在 $r\approx97$，原粗/中/细层径向间距约为
+$15.08/7.86/3.85$，七点模板跨宽约 $102.6/45.7/23.6$；
+尺度增长后粗层明显未进入局部渐近区。
+
+固定实际态把求导/插值宽度改为 $9/11$ 点未恢复全域阶；
+制造导数、源映射与 Poisson 链保持高阶；
+无接口移动 Gaussian 在继续加密后也恢复五阶。
+这些证据支持径向演化欠分辨率，未发现普遍的“每次求导固定降一阶”规则。
+整个径向加倍的完整 PDE 控制显著减小远区误差，但缩小时间步且改变 halo。
+保护前缀的 CDF 重分配在保持连接与近环间距后重做三层轨道，排除了这一主要混杂。
+
+\subsection{实验身份与比较定义}
+三层从同一原初值独立演化至 $\tau=10$。取
+$h=.06,.03,.015$；基准 $n_r=193,385,769$，
+$n_\theta=65,129,257$；$R_{\max}=10^{10}$；
+启用 $f=2,\ r_a=4,\ r_b=20$。
+实际核心数组分别为 $21\times41,41\times81,81\times161$，
+环带分别为 $310\times65,618\times129,1236\times257$。
+全部使用 RK4、CFL $0.3$、最大步长 $0.2$、\code{linear5}、
+$\nu=.1$，以及严格 Poisson 次数 $64/80/20$
+（核心两轴/角向/径向面板）。
+这比普通默认 $48/64/16$ 更密；不能用默认配置替代实验身份。
+
+沿用旧报告的全部 $15975$ 个固定物理查询，不删远场点、
+不对齐平移或幅值，不拟合尾项。查询主量按
+$W=H+\mathcal P_h\eta$、$q=G_X+\mathcal P_h\Dx\eta$、
+$Q=H_{\tau X}+\mathcal P_h\Dx\eta_\tau$ 重建。
+设 $D_{12}(f),D_{23}(f)$ 为粗中、中细查询无穷自差，
+\begin{equation}
+ p_{\rm obs}(f)=\log_2\frac{D_{12}(f)}{D_{23}(f)}.
+\end{equation}
+最细层只是比较层，不是精确解；有限查询最大值也不是连续全域无穷范数上界。
+
+\begin{center}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+量 & 新 $D_{12}$ & 新 $D_{23}$ & 新 $p_{\rm obs}$ & 原 $p_{\rm obs}$\\
+\midrule
+$W$ & $1.20644\,10^{-2}$ & $5.05373\,10^{-4}$ & $4.5773$ & $4.0118$\\
+$q$ & $1.18295\,10^{-3}$ & $4.50843\,10^{-5}$ & $4.7136$ & $3.2297$\\
+$F$ & $1.66863\,10^{-2}$ & $7.48475\,10^{-4}$ & $4.4786$ & $2.9375$\\
+$Q$ & $1.44955\,10^{-3}$ & $9.02401\,10^{-5}$ & $4.00569$ & $2.4321$\\
+$u_1-U_{\rm ref}$ & $2.54669\,10^{-3}$ & $1.03664\,10^{-4}$ & $4.6186$ & $3.4209$\\
+$u_2$ & $1.05367\,10^{-3}$ & $6.23827\,10^{-5}$ & $4.0781$ & $2.8105$\\
+绝对 $u_1$ & $3.85150\,10^{-3}$ & $1.69472\,10^{-4}$ & $4.5063$ & $3.5798$\\
+\bottomrule
+\end{tabular}
+\end{center}
+可辨识标量中，$\ell,\omega,S,a$ 的阶数约为
+$4.578,4.597,4.566,4.645$；瞬时 $c_l$ 约为 $5.406$。
+异常大的个别差比可能来自抵消，不据此宣称超高阶。
+诊断可辨识阈值取 $10^{-10}\max(1,\text{共同量级})$；
+它是报告阈值，不是机器精度或已证明误差界。
+
+\clearpage
+\section{控制实验、成本与尚未建立的结论}
+\subsection{时间与 Poisson 控制的范围}
+新中层完整轨道将 CFL 从 $0.3$ 改为 $0.18$，
+从原初值推进至 $\tau=10$；预算停止于 $\tau=9.624716$ 后，
+从同一接受态续算完成，共 $2534$ 步。原 partial 报告及期限未改写，
+续段使用独立额外预算。两轨道各有 $8$ 次峰事件、没有最大步长封顶步；
+实际平均步长比为 $0.601026$。
+在四阶缩步近似下，用
+\begin{equation}
+ E_t^{\rm estimate}=\frac{\norm{f_{.3}-f_{.18}}_{\mathcal Q,\infty}}
+                           {1-.6^4}
+\end{equation}
+与新 $D_{23}$ 比较，七场的比值最大 $4.03\times10^{-5}$。
+它支持中层时间贡献很小；没有完成最细网格时间控制，
+不能把该估计写成最细层误差证书。
+
+固定最细 $\tau=10$ 接受态的 $\eta$ 和尺度，把严格 Poisson
+$64/80/20$ 加密为 $96/128/24$。两级均过原门限，
+两次新重建的原生密度与源逐位相同。
+公共查询上的改变量为
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+量 & $F$ & $Q$ & $u_1-U_{\rm ref}$ & 绝对 $u_1$ & $u_2$\\
+\midrule
+端点差 & $2.75\,10^{-8}$ & $4.55\,10^{-9}$ & $5.90\,10^{-9}$ &
+ $5.71\,10^{-9}$ & $1.09\,10^{-9}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+相对各自 $D_{23}$ 的最大比约为 $5.70\times10^{-5}$。
+这仅是固定状态的谱/源采样敏感性，没有用更细 Poisson 重算整条轨道，
+也没有认证域外源尾。
+
+\subsection{实际成本与时间步长}
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+$h$ & 原耗时/s & 新耗时/s & 耗时比 & 接受步数 & 最大阶段 CFL\\
+\midrule
+.06 & 75.91 & 83.56 & 1.101 & 764 & .288466\\
+.03 & 213.99 & 260.30 & 1.216 & 1523 & .286660\\
+.015 & 1196.78 & 1349.08 & 1.127 & 3115 & .285807\\
+\bottomrule
+\end{tabular}
+\end{center}
+三层均无重试，接受步数与旧网格逐层完全相同。
+增加外区自由度主要增加单步成本，没有在本次轨道中进一步收紧实际时间步。
+中层整段径向加倍控制耗时约 $730.82$ 秒、$2797$ 步；
+它与新 $260.30$ 秒比较说明保护内环的实际价值，
+但两种网格及 halo 不同，不能称为严格等误差基准。
+
+新旧各自中细层的 $Q$ 自差比约为 $17.23$。
+此前“中层相对同一旧最细层的 $Q$ 差减小约 $91$ 倍”
+属于另一参照比较；两种数字不可互换。
+当前性能表来自同机单线程 MATLAB 计时，包含初始化、接受/重试步、
+检查点读回与输出，排除外部 MATLAB 启动；机器负载及输出策略也会影响复测。
+
+\subsection{证据边界与下一步}
+\begin{enumerate}
+ \item $Q$ 的 $4.00569$ 仅略高于四阶，需更细一级和更多阶段时刻检验渐近趋势。
+ \item 需最细网格时间控制、整轨道 Poisson 加密及外半径/源尾控制，
+       才能进一步隔离完整误差预算。
+ \item 有限公共查询应增密并检查误差热点；它仍不是连续全域严格误差界。
+ \item 当前固定保护半径和加密带针对已观察的 $\tau=10$ 主体分布。
+       更长时间中主体可能离开当前分辨率配置；自动重网格尚未迁移。
+ \item 当前 RK4/背景余项路径尚未完成 $200\tau$ 及 50 分钟验证。
+       历史 SSPRK3 的 $200\tau$ 耗时不能作为本算法的精度或速度认证。
+\end{enumerate}
+原冻结空间报告的
+\code{fullIVPShortWindowQualified=false} 保留；
+后补的分项控制不回写旧报告资格标记。
+
+\clearpage
+\section{模块契约、重现与代码维护}
+\subsection{维护边界与模块表}
+当前维护代码位于 \code{test/+ipm_cr}；原
+\code{time_evolution/+ipm} 与 \code{+ipm_c} 提供既有模型、
+authority 和规范功能，不在本报告整理中改变。
+实验 \code{runtime} 快照与输入 SHA 是历史证据，不能当作冗余源码删除。
+维护版后续等价缓存重构应使用新快照与回归结果，
+不能继承旧冻结轨道的源码身份。
+
+\begin{longtable}{p{0.30\linewidth}p{0.62\linewidth}}
+\toprule
+模块 & 输入、输出与责任\\
+\midrule
+\endhead
+\code{explicit/initialize.m} & 原解析初值、原 authority；
+建立 $W,\eta$、完整尺度、墙参考及初始 RHS。\\
+\code{geometry.m}、\code{redistributeRadialAxis.m} &
+固定网格、活动掩码、真实度量、保护前缀和交换计划；不推进时间。\\
+\code{synchronize.m}、\code{differentiate.m} &
+活动 donor 同时 ghost 交换；常数消去后的物理导数。\\
+\code{background.m}、\code{gaussianBackground.m}、\code{dipoleTail.m} &
+当前模型/尺度/查询的解析字段；无跨状态密度缓存。\\
+\code{evaluateResidual.m}、\code{evaluate.m} &
+唯一完整耦合 RHS；组装 $q,F,Q$、规范、CFL 和审计。\\
+\code{transport.m}、原生内核 &
+固定密度的单轴重构、实际速度分裂及速度 Jacobian；不决定步长。\\
+\code{gauge.m}、\code{wallMeasure.m} &
+原 I/P/C 泛函、同一峰权重及二维规范求根。\\
+\code{explicit/poisson.m}、\code{interpolate.m} &
+唯一活动 owner 源映射、解析源叠加、谱速度一致返回。\\
+\code{explicit/sampleState.m} &
+接受态的统一只读查询：解析背景加余项重构、速度、速率和尺度；
+保留原三层试验的采样算术，不推进或对齐状态。\\
+\code{Solver.m}、\code{+core}、\code{+polar} &
+独立谱算子、分解、Schur、严格验收、直接回退。\\
+\code{advance.m}、\code{rk4Tableau.m} &
+数组和标量同步 RK4、全阶段 CFL、峰事件及试步回滚。\\
+\code{tests/run_ipm_cr_explicit.m} &
+唯一演化运行入口、锁、历史、接受态检查点、恢复及状态。\\
+\code{run_explicit_experiment.py} &
+冻结源码/配置/authority，监督同一 MATLAB 入口与资源。\\
+\bottomrule
+\end{longtable}
+优化优先复用固定几何、线性分解和单 RHS 不变重构。
+缓存键必须覆盖真实轴、活动范围、算子和数值选项；不能只按数组尺寸判断。
+等价优化需检验字段、规范、CFL、接受/拒绝行为及恢复语义，
+不能以降低验收门限换速度。
+
+本轮维护保留公共 \code{sampleState}，收拢空间研究中重复的场、速率和尺度采样。
+旧诊断及历史推进入口经 SHA 归档后从维护路径移除；历史数值输出及
+冻结运行时仍保留。独立研发原型保留于原型目录，不进入生产调用链。
+短程逐字段等价回归另行记录，不能把旧冻结 $\tau=10$ 结果改标为
+整理后源码的新轨道试验。
+
+本轮还试验了差分稀疏行/列计划的几何缓存，但没有采用该候选。
+候选通过逐字段等价回归，中层局部差分基准的中位耗时却为
+$4.20885$\,ms，高于原实现的 $3.96452$\,ms，约慢 $6\%$。
+因此差分与几何维护代码恢复原实现，候选源码和测试结果单独留证。
+该局部基准既不等于完整 RHS 的成本，也不支持任何完整 RHS 加速结论。
+
+\paragraph{整理后的独立回归。}
+最终维护验证见
+\path{test/results/cleanup_20261022/regression_final/refactor.json}。
+在原网格与启用径向重分配的两种配置上，分别从同一原始初值
+推进至 $\tau=0.03$（各 2 个接受 RK4 步），初末主态、完整 RHS、
+公共查询场及诊断与清理前冻结版本逐字段、逐字节一致；
+规范参考、几何键、物理时钟与完整阶段 CFL 同时核对，常数差分严格为零。
+另运行三层静态重分配回归，以及 $\tau=0.003$ 的三层研究入口集成检查，
+验证统一采样调用及来源清单不变。后两项分别验证结构/算子与入口连通性，
+不将极短轨道当作新的空间精度阶数证据。
+现有核心数值文件保持清理前字节内容，新增只读采样接口；
+历史 $\tau=10$ 原始数据、检查点和冻结运行均未修改。
+
+\subsection{可执行入口}
+在项目根目录的 MATLAB 中，组件验证先写入新的绝对输出目录：
+\begin{Verbatim}[fontsize=\small]
+addpath('test','test/tests','time_evolution');
+build_ipm_cr_native();
+out = fullfile(pwd,'test/results/my_static_check');
+test_ipm_cr_radial_redistribution(out);
+\end{Verbatim}
+当前修复方案的单条原初值轨道示例为：
+\begin{Verbatim}[fontsize=\small]
+g = struct('coreSpacing',.03, ...
+    'grid',struct('nr',385,'ntheta',129,'firstSpacing',.03), ...
+    'radialRedistribution',struct('enabled',true,'factor',2, ...
+        'preserveRadius',4,'fullRefinementRadius',20));
+p = struct('coreDegree',[64,64],'angularDegree',80, ...
+    'polarDegree',20,'rOuter',1e10,'requireAccuracy',true);
+o = struct('outputDir',fullfile(pwd,'test/results/my_tau10'), ...
+    'tauEnd',10,'wallSeconds',600,'geometry',g, ...
+    'solverOptions',p,'cfl',.3,'timeIntegrator','rk4');
+summary = run_ipm_cr_explicit(o);
+\end{Verbatim}
+同一源码与数值配置下再次运行同一命令可从接受态继续。
+源码、背景、网格或 authority 改变须用新目录，不能恢复到旧轨道。
+三层联合试验入口为 \code{test_ipm_cr_ivp_spatial}；
+其选项、比较云和资源预算应随新实验冻结，不能覆盖下列已完成报告。
+
+\subsection{证据索引}
+路径均相对项目根目录；下列记录及其 SHA 清单构成本报告的数据来源。
+\begin{itemize}
+ \item 算法与连接契约：
+       \code{test/ARCHITECTURE.md}，
+       \code{test/CONNECTION_METHOD.md}。
+ \item 三层修复汇总：
+       \path{test/results/radial_redistribution_tau10_20261022/fix_result.json}。
+ \item 原始三层新轨道：
+       同目录 \path{study/ivp_spatial.json} 及 \code{.mat}、
+       冻结 \code{runtime} 和 \code{source_inventory.json}。
+ \item 中层时间控制：同目录 \code{time_check_completed.json}；
+       保留原预算停止记录与独立续段账本。
+ \item 固定末态谱控制：同目录
+       \path{study/endpoint_poisson_tau10_v2.json}。
+ \item 原网格对照：
+       \path{test/results/tau10_order_20261022_1323/study/ivp_spatial.json}。
+ \item 定位与整段径向控制：
+       \path{test/results/diagnose_tau10_20261022/diagnosis.json}，
+       同目录 \path{radial_refinement/radial_refinement.json}。
+ \item 静态重分配：
+       \path{test/results/radial_redistribution_static_20261022_v2/radial_redistribution.json}；
+       主尾独立检查：
+       \path{test/results/tail_qualified_20261022_v1/tail_background.json}。
+\end{itemize}
+报告中的局部一致性、离散系统验收、有限查询轨道自收敛和计算性能
+分别保留其测量对象；任一项都不替代其他项。
+\end{document}

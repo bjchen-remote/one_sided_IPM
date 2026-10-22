@@ -1,0 +1,8 @@
+* text=auto
+*.m text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.cpp text eol=lf
+*.md text eol=lf
+*.tex text eol=lf
+*.mat -text -diff
