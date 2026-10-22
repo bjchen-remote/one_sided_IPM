@@ -1,0 +1,597 @@
+{
+  "format": "ipm_cr_mesh_figures_v1",
+  "input": "mesh.mat",
+  "input_sha256": "363dedd4f29f2024de1619b24c74cecddc3da1182e97fa0894463ff1afbd34a5",
+  "script": "tools/plot_mesh.py",
+  "script_sha256": "fd4fd9f8b5351a398200507b4e3d2dfbbf161c982fada8da68c9f0d1761cdd9c",
+  "style": "mesh",
+  "style_profile": "tools/styles/mesh.json",
+  "style_profile_sha256": "39d462b8a871228bfea58924ff4fd5d56477a825f37528fd1c8c4897511c3b68",
+  "style_details": {
+    "palette_roles": {
+      "core": "#2878B5",
+      "polar": "#D96B59",
+      "ghost": "#7B8591",
+      "overlap": "#E8EDF2",
+      "panel": "#556273",
+      "ink": "#263445",
+      "paper": "white"
+    },
+    "axes": "white background, thin left/bottom axes, sparse outward ticks",
+    "typography": "portable sans-serif; bundled profile controls font sizes",
+    "distinction": "solid active nodes; hollow ghost nodes; dashed collars and panel joins",
+    "grid_lines": "all true mesh lines retained, thin strokes for dense meshes",
+    "composition": "near: original overview with a linked equal-aspect real collar crop; global: full mapped mesh, three radius leaders and the actual outer contour"
+  },
+  "line_subsampling": false,
+  "no_time_integration": true,
+  "no_physical_field_data": true,
+  "matplotlib": "3.11.0",
+  "source": {
+    "format": "ipm_cr_mesh_v1",
+    "createdUtc": "2026-10-22T11:19:24Z",
+    "dataFile": "mesh.mat",
+    "sha256": "363dedd4f29f2024de1619b24c74cecddc3da1182e97fa0894463ff1afbd34a5",
+    "cfg": {
+      "transport": {
+        "grid": {
+          "nr": 385,
+          "ntheta": 129,
+          "rmax": 10000000000.0,
+          "firstSpacing": 0.03,
+          "radialMap": "uniform_core",
+          "coreRadius": 2,
+          "coreTailFraction": 0.01,
+          "originFitDegree": 6,
+          "stencilWidth": 7
+        },
+        "coreHalfWidth": 1.2,
+        "coreHeight": 1.2,
+        "coreSpacing": 0.03,
+        "polarStart": 0.72,
+        "ghostWidth": 3,
+        "interpolationWidth": 7,
+        "radialRedistribution": {
+          "enabled": true,
+          "factor": 2,
+          "preserveRadius": 4,
+          "fullRefinementRadius": 20
+        }
+      },
+      "poisson": {
+        "coreHalfWidth": 1.2,
+        "coreHeight": 1.2,
+        "coreDegree": [
+          64,
+          64
+        ],
+        "rInner": 0.75,
+        "rOuter": 10000000000.0,
+        "polarDegree": 20,
+        "angularDegree": 80,
+        "logPanelWidth": 0.6931471805599453,
+        "outerBoundary": "decay",
+        "linearTolerance": 1e-10,
+        "traceTolerance": 1e-10,
+        "overlapValueTolerance": 1e-07,
+        "overlapFluxTolerance": 1e-06,
+        "strongTolerance": 1e-05,
+        "requireAccuracy": true,
+        "auditPoints": 81
+      }
+    },
+    "bounds": {
+      "coreBox": [
+        -1.2,
+        1.2,
+        0,
+        1.2
+      ],
+      "coreActiveBox": [
+        -1.1099999999999999,
+        1.1099999999999999,
+        0,
+        1.1099999999999999
+      ],
+      "polarInnerHalo": 0.7202362246550684,
+      "polarInnerActive": 0.8103568822862767,
+      "outer": 10000000000.0,
+      "spectralCoreBox": [
+        -1.2,
+        1.2,
+        0,
+        1.2
+      ],
+      "spectralInner": 0.75
+    },
+    "counts": {
+      "coreNodes": 3321,
+      "coreActive": 2850,
+      "coreGhost": 471,
+      "polarNodes": 79722,
+      "polarActive": 79335,
+      "polarGhost": 387,
+      "transportActive": 82185,
+      "radialBase": 385,
+      "radialFull": 642,
+      "radialAnnulus": 618,
+      "angularTransport": 129,
+      "spectralCoreNodes": 4225,
+      "spectralPolarNodes": 55161,
+      "spectralPanels": 34,
+      "spectralPanelLocalRadialNodes": 714
+    },
+    "sources": [
+      {
+        "path": "examples/export_mesh.m",
+        "sha256": "8563b053876c5667ce220a8f1aa5d0880451890c6dbdf15b807bfdebaee3655c"
+      },
+      {
+        "path": "src/+ipm_cr/+diag/compare.m",
+        "sha256": "63de105ee572756341895c3bbc82617f0a437ffc40d5856f1d9111b7d5873dc9"
+      },
+      {
+        "path": "src/+ipm_cr/+diag/fields.m",
+        "sha256": "90d65a702c2303031085e51c3cda642f7ba54c07882789c1d38938857cbf9353"
+      },
+      {
+        "path": "src/+ipm_cr/+diag/overlap.m",
+        "sha256": "3a15e56c439739805a33c32b383f7cc353524967800450b8c3de77146e499fdb"
+      },
+      {
+        "path": "src/+ipm_cr/+evolve/init.m",
+        "sha256": "45ff2b1921b9836469df38089432b596fcf354458111cd62f7c82071bda1ab86"
+      },
+      {
+        "path": "src/+ipm_cr/+evolve/residual.m",
+        "sha256": "607174c386bd715664ebd1e38f2718463e2557a45dfc274ee5ac01eb9b742938"
+      },
+      {
+        "path": "src/+ipm_cr/+evolve/rhs.m",
+        "sha256": "4262db128417e887f2f8e93b4d7062550a2f80a4d80b3ab9505fe7c91148b8f8"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/centroid.m",
+        "sha256": "ebc57d5193822cc0e8e480f5df2efeb266a9011c8346d5e6935159728bca5fd5"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/integral.m",
+        "sha256": "94b5d4780fa71ab9409bc57dba47dc821cb810b84822394bd83c71b5a145166e"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/measure.m",
+        "sha256": "58b26c4772f1ced7aa1b25928aeafddbc3b1fbd0956c47dbd243315e1293dd5d"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/peak.m",
+        "sha256": "9a8d34f18b90d2fbda4515e04c8c1f3175f87bfb719110e03c9db2fa744a7294"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/rates.m",
+        "sha256": "9b098b4254160757b54186e473c96a99ce1a477cfe88693861dde866b1d9ccc0"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/seed.m",
+        "sha256": "4118690b44069cfc548565204c286bf52286af9f56d1cd9802fd9522e73558c0"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/wall.m",
+        "sha256": "bf6fa4b7cba7bd29bd6edf91a89253977bfdc936636f28403f5b78e50df7e71d"
+      },
+      {
+        "path": "src/+ipm_cr/+gauge/wallDiff.m",
+        "sha256": "df1480cdb0bd046d9dd9108598590b78f57702e8ff93461451421274cad64aae"
+      },
+      {
+        "path": "src/+ipm_cr/+internal/auditSource.m",
+        "sha256": "258f31ed287fd1a1b86870602a31601bc01b1468be1bdad07122323fd802009d"
+      },
+      {
+        "path": "src/+ipm_cr/+internal/bary.m",
+        "sha256": "a90ad7a56792689c291e35b1c4ef26904e282bfb886ee3a7e755ca1614f1d619"
+      },
+      {
+        "path": "src/+ipm_cr/+internal/cheb.m",
+        "sha256": "1122f717886786d0226ae0407e816d95a93bc806c2960e6b2147ed7f604c09ac"
+      },
+      {
+        "path": "src/+ipm_cr/+internal/key.m",
+        "sha256": "675282cab98c70a9b3776221585163b1aa0437cb19e2e95c91b64381dda87857"
+      },
+      {
+        "path": "src/+ipm_cr/+internal/state.m",
+        "sha256": "ad3d9f0c31d4ada1bcc7f8c4234ad5f5389462771ab118ba79587643009e6881"
+      },
+      {
+        "path": "src/+ipm_cr/+io/checkpoint.m",
+        "sha256": "33773778088c684874e6aad8ce73389fe686d099c88c1cd0b2000b7f751916f5"
+      },
+      {
+        "path": "src/+ipm_cr/+io/history.m",
+        "sha256": "c0604acf75238078287a45a3ebbad65d0668a4c4eb7a3fa85ddd130be5504945"
+      },
+      {
+        "path": "src/+ipm_cr/+io/identity.m",
+        "sha256": "90319f66912bdd1cec9165b5f764e980c6462ed1960ed78055a4b672e5b79cc8"
+      },
+      {
+        "path": "src/+ipm_cr/+io/json.m",
+        "sha256": "1b67a25741f03a6e22a757091a529fa67daed46f0e00c77983f89548e5120527"
+      },
+      {
+        "path": "src/+ipm_cr/+io/sha.m",
+        "sha256": "ca161b8371ef407738d72f7a410e9d9dc7c0e490a82746569f78562112bb0aa4"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/build.m",
+        "sha256": "fe51b917ee7f4447716154ced2866357d4e544534ee0d1302d28f9a29c69d2f1"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/diff.m",
+        "sha256": "7e593230775d54cada08192cdf0b437ec70a9121e57a3e27885ce48457e7476c"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/fd.m",
+        "sha256": "f652eaa652d46655c81fab981c08b099a66455c347787ef4c4fed96af927c003"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/fill.m",
+        "sha256": "c40e8406e116702ee1c2b8481838eba729832db3b4aa5cf76490c9e7a6958c01"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/localMap.m",
+        "sha256": "6b63062b6b74d9a5e031420d1b84c8df7770b399147073509da3926bd8154b35"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/polar.m",
+        "sha256": "bb90fd973c19d64aedda83e4e822313f8d584925edae959e16f322f9ef74334d"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/radial.m",
+        "sha256": "8980bcfea3a886e9a035fe88f94a1c3429e4db247bb74978206b4f6a410dcd69"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/radialAxis.m",
+        "sha256": "2370ee723241a897f97ab8aaafbfc40cfd4c9f47b238dfae537c89b2ca42e6b9"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/sample.m",
+        "sha256": "9b03536471e0c5fe0c756152007d2eb8906e3556323a4a03dacaf435f306ad37"
+      },
+      {
+        "path": "src/+ipm_cr/+mesh/tensorMap.m",
+        "sha256": "34f440addd420ae8a288a899506dd4e772c1b10ca22454e0f5d7520bcf6e1095"
+      },
+      {
+        "path": "src/+ipm_cr/+model/background.m",
+        "sha256": "f1fff431eeb40dc5fcb4bf423c9d08fd1b296237192796397caa21ee05094a2b"
+      },
+      {
+        "path": "src/+ipm_cr/+model/gaussian.m",
+        "sha256": "ea4457ba37ead942c787107d250d9bf0de26ccd352d992c915d42e720a318228"
+      },
+      {
+        "path": "src/+ipm_cr/+model/initial.m",
+        "sha256": "a336aaec9e66f2d33d757b4f46f891d3ef625f8d270b78320e384bdd6ebc8c88"
+      },
+      {
+        "path": "src/+ipm_cr/+model/reference.m",
+        "sha256": "234c1f30cf492891c436c1415a5ad5dd8966bdbca98ba22a414888702bf52003"
+      },
+      {
+        "path": "src/+ipm_cr/+model/source.m",
+        "sha256": "45ffd06366f1cacb860760f3913c7c182db63406146e172ae47eca0de131f154"
+      },
+      {
+        "path": "src/+ipm_cr/+model/tail.m",
+        "sha256": "da74ff549a219a3aa4ca9d34fc06740377c01992ee9b53d38c9d18ac7fd07d5b"
+      },
+      {
+        "path": "src/+ipm_cr/+op/apply.m",
+        "sha256": "bc924b8770e28c01c56eb610cf6e43fe5dc1e879ebcbb6ac235c9ff943969742"
+      },
+      {
+        "path": "src/+ipm_cr/+op/prepare.m",
+        "sha256": "fb3fe80b6ed3afb4253ae0a3eb0bde8a0bd4353afeeeb7ba937ffc5d5ef044a0"
+      },
+      {
+        "path": "src/+ipm_cr/+op/transport.m",
+        "sha256": "203bfe7388de2156b6dae7e396bf70466802e15b7f2ae9807128285a398afcef"
+      },
+      {
+        "path": "src/+ipm_cr/+op/weno5.m",
+        "sha256": "de3b10745ab06cd8d7ae341df9cf783db2fd409a0cbb12bf2d6b655f73f166dd"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/+core/build.m",
+        "sha256": "35021abcf6189552024a7f7c175de81f67fa7b42ef32341f76ffd7b3f842e411"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/+core/evaluate.m",
+        "sha256": "591c436eb63f1686c117a17a9e06ad2d2d52644b3601fd7d16cb0ec5dcfe7123"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/+core/solve.m",
+        "sha256": "032f5268129fc26cc395f6ae24a48522f1cfcd31aa1dba6baf1a84aae597ebf5"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/+polar/build.m",
+        "sha256": "4bb4340abc0c95318b8dee0726db35bfb9a00ae263ff93f5447cbbf4452989a1"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/+polar/evaluate.m",
+        "sha256": "aa3e858e4322a1698d495d80a86a752a0d3d3cf9429a2cdc70899c24c9f3d558"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/+polar/solve.m",
+        "sha256": "ad66cc5f43fd6cae50465e533ba18bf4b0efa44df4131d5a182601c2647893ae"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/+polar/withInnerTrace.m",
+        "sha256": "6cdb2bf99c74d07e34d50a34fdca60da29b3621227a399dec96fc76f1a13fb88"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/apply.m",
+        "sha256": "4c73d9671048b3389af607df1824f45be2311027e96577f6f5f80ec7573ab356"
+      },
+      {
+        "path": "src/+ipm_cr/+poisson/plan.m",
+        "sha256": "66fa8219acd294985fccbcb385161db011fc9fc265592b103ba0a80f335dee83"
+      },
+      {
+        "path": "src/+ipm_cr/+time/event.m",
+        "sha256": "b1ddc8d4ed8abc603f302fdcf4d92c5571f2a586ab2ecdf156fb685e86eebd7e"
+      },
+      {
+        "path": "src/+ipm_cr/+time/peak.m",
+        "sha256": "801ed35366a3b7ce288bb679f207bbdbfa08f8be0ff46ab62a59b19ed3719438"
+      },
+      {
+        "path": "src/+ipm_cr/+time/rk4.m",
+        "sha256": "44c73afc1546aff97ee4f9d0e4c8492787a0d80cb809ca0398bf93197642eaac"
+      },
+      {
+        "path": "src/+ipm_cr/+time/step.m",
+        "sha256": "b321b646ab97601d5650e230d6227a75bb9a225d57a077e2724b6b901196e4dc"
+      },
+      {
+        "path": "src/+ipm_cr/+time/trial.m",
+        "sha256": "77cea57f28074145ddd577fbab07da00a516174b45272757d1d87be3e79bf0e2"
+      },
+      {
+        "path": "src/+ipm_cr/config.m",
+        "sha256": "95490d807d1cfb05c43c83cb81a09b68e391a76d256450bbb9fb1d6e4546b719"
+      },
+      {
+        "path": "src/+ipm_cr/context.m",
+        "sha256": "adaef052200008cbde791bb2b3a4e8a794e0aa74b0330900be995978afe0050b"
+      },
+      {
+        "path": "src/+ipm_cr/init.m",
+        "sha256": "9a3c472489efa149fba491f3e17daf2592c3cd773d642fc77382a72384d3d672"
+      },
+      {
+        "path": "src/+ipm_cr/pconfig.m",
+        "sha256": "8d93d243599304906a7b8d70158deeb290475a3eaef60c3298d35ed89cf7e281"
+      },
+      {
+        "path": "src/+ipm_cr/problem.m",
+        "sha256": "aee8e6e1f812e4ecdb05aa292cd1e987995a5b810be6aa6324cd428456f4b7a1"
+      },
+      {
+        "path": "src/+ipm_cr/psolver.m",
+        "sha256": "e20c159d58b86f5406d85201c4ed0c2eaf635706afa956b1524e7575faa58c3d"
+      },
+      {
+        "path": "src/+ipm_cr/refresh.m",
+        "sha256": "474d48f898a8932e9d0154d6b1e0cddd72f073f42708870bdad524182f09ad80"
+      },
+      {
+        "path": "src/+ipm_cr/rhs.m",
+        "sha256": "e496a892cfc3eab3bff68a2aaf025c16d142989c4920054a6bf3861f17449376"
+      },
+      {
+        "path": "src/+ipm_cr/root.m",
+        "sha256": "7d8736bc5d61cc9aed26546ad6db1eb8c50ea43665ad2ec2f5c963cf9e989d3c"
+      },
+      {
+        "path": "src/+ipm_cr/run.m",
+        "sha256": "9d87b9b294a0ddf07fb9e5c3f03b72fc3f2e45093ddceceb9a918e863eb6f326"
+      },
+      {
+        "path": "src/+ipm_cr/sample.m",
+        "sha256": "c5dbdf7f01902371ca1468582a756c832a026e2792c8348502ab91204159794d"
+      },
+      {
+        "path": "src/+ipm_cr/step.m",
+        "sha256": "83471ebd0acdebe613b5a767590dfadac9ad92afcec9de67c5891dc8da28a1cd"
+      }
+    ],
+    "noTimeIntegration": true,
+    "noPhysicalFieldData": true,
+    "coordinates": "Actual physical x,y; polar radius spans the full half plane to 1e10.",
+    "masks": "Both overlapping active interiors evolve; ghost masks are interpolation collars.",
+    "panelContract": "panelIndex is MATLAB 1-based, degree+1 by nPanels. Adjacent panel endpoints share one global node; panelR/panelT retain both local copies.",
+    "metricContract": "dr/dj for the redistributed integer radial index; complete protected FD7 stencils retain original radialMetric/(baseNr-1).",
+    "sourcesContract": "All src MATLAB files plus this exporter, with SHA-256."
+  },
+  "figures": {
+    "mesh-near": {
+      "caption": "Transport mesh in the solver's native (X,Y) coordinates with equal axis scaling in both panels. The Cartesian core contains 2,850 active nodes; the annulus contains 79,335. Blue and coral lines mark their active interiors. Both evolve in the shaded overlap. Gray dashed lines are the three-layer interpolation collars. The active annulus starts at r=0.810357; the dark line is the wall Y=0. Panel (a) retains the original overview window; the outlined ROI is magnified in (b), using the same Cartesian collar window as mesh-join (b). Filled colored points are active nodes and hollow gray points are ghosts. All mesh lines intersecting either window are shown; no donor links are inferred. The outer domain extends to r=10^10.",
+      "caption_zh": "含时输运网格在求解器原生 (X,Y) 坐标中的近场图，两窗均横纵等比例。蓝色为张量核心的活动节点网格，珊瑚色为极坐标环带的活动节点网格；浅灰蓝底是两套活动自由度独立推进的重叠区。灰虚线为三层插值 ghost，黑线是壁面 Y=0。(a) 保留原概览窗口，框选区域在 (b) 等比例放大；彩色实心点为活动点，灰色空心点为 ghost。放大窗与 mesh-join (b) 相同；未画 donor 连线，未对窗口内网格线抽样。",
+      "coordinates": "native, unwarped X,Y; equal aspect in both windows; no time-dependent coordinate conversion",
+      "overview_window_xy": [
+        -2.04,
+        2.04,
+        0,
+        2.04
+      ],
+      "detail_window_xy": [
+        0.34,
+        0.64,
+        0.9349999999999999,
+        1.2349999999999999
+      ],
+      "size_inches": [
+        8.6,
+        3.9
+      ],
+      "files": [
+        {
+          "file": "mesh-near.png",
+          "sha256": "ff24c8e49fd3484c8ad5b82aaa6bf5b94c9342dd097e9efc58a94bfcb3476d6c",
+          "bytes": 1007509,
+          "published": true
+        },
+        {
+          "file": "mesh-near.svg",
+          "sha256": "8493aaddcec977cd5c13fb8c7ced64772f6dbc24fdff574d001a4c7f7064545f",
+          "bytes": 740737,
+          "published": false
+        },
+        {
+          "file": "mesh-near.pdf",
+          "sha256": "a6559cb0f513c828d6bc9c8bd6e574983e8da811864b2e72d7c14c9d0c2aa957",
+          "bytes": 240800,
+          "published": true
+        }
+      ]
+    },
+    "mesh-join": {
+      "caption": "Two native-coordinate magnifications of the real interpolation collars. (a) The three inward annular ghost rows receive values from active Cartesian donors. (b) The three top Cartesian ghost rows receive values from active annular donors. Filled blue/coral circles are active nodes; hollow gray circles are interpolation ghosts. Both axes use equal native-coordinate scaling within each panel. All visible nodes and lines are retained; the two panels show different windows. The 7-by-7 tensor interpolation stencils are not drawn.",
+      "caption_zh": "原生 (X,Y) 坐标中真实接缝的两个等比例局部窗口。(a) 环带内侧三层 ghost 从活动张量核心取值；(b) 张量核心顶部三层 ghost 从活动环带取值。蓝/珊瑚实心点是活动节点，灰空心点是插值 ghost。显示窗口内全部节点和网格线；两窗覆盖不同区域，7×7 张量插值模板未画出。",
+      "coordinates": "native X,Y; equal aspect within each of two windows",
+      "size_inches": [
+        8.2,
+        4.4
+      ],
+      "files": [
+        {
+          "file": "mesh-join.png",
+          "sha256": "b5f46b56f589d7bf5a3ca288953ba85b27f4690ce3639501fc1019b4c366a16a",
+          "bytes": 354305,
+          "published": true
+        },
+        {
+          "file": "mesh-join.svg",
+          "sha256": "ee39eee6942e363d63e103d3fa72f65de9440f86caac53f0dc5654b6f4db697f",
+          "bytes": 271581,
+          "published": false
+        },
+        {
+          "file": "mesh-join.pdf",
+          "sha256": "1792bb7cd8f2616b4e25cb9399fac71b47d4aee45162be8cb86a67aa0efbd9d4",
+          "bytes": 90668,
+          "published": true
+        }
+      ]
+    },
+    "mesh-global": {
+      "caption": "The full transport mesh under the display-only radial transform r=sqrt(X^2+Y^2), s=log10(1+r), (xi,upsilon)=s(cos(theta),sin(theta)). This is a mapped view. All 618 retained annular radial rows and 129 angular columns are drawn, reaching r=10^10. The small blue patch is the same Cartesian core under the same transform. Three fine leaders identify exact native-coordinate radii 10^2, 10^6 and 10^10; these labels are geometric references, not replacement mesh rows. The stronger outer contour is the actual last exported radial row. Redistribution preserves r<=4 and uses a configured tail density factor of 2 (realized 1.998331), with full refinement from r=20; no density field or time trajectory was computed to make this figure.",
+      "caption_zh": "全域输运网格使用仅用于显示的径向变换 s=log10(1+r)，(ξ,υ)=s(cosθ,sinθ)，其中 r=√(X²+Y²)，不代表原生坐标等比例。完整保留环带所有径向行和角向列，外边界 r=10^10。蓝色小片为同一变换下的张量核心。径向加密保留 r≤4，r≥20 的尾部加密配置为 2 倍，实际密度比 1.998331；三条细引线标出原生半径 10²、10⁶、10¹⁰ 的位置，不替代实际网格行。较强外轮廓取自实际最外层径向网格行；本图未推进物理场。",
+      "coordinates": "xi=log10(1+r)*cos(theta), upsilon=log10(1+r)*sin(theta); display transform only",
+      "size_inches": [
+        8.6,
+        4.8
+      ],
+      "files": [
+        {
+          "file": "mesh-global.png",
+          "sha256": "7990462017b46b113c273d2f5c97ae82175c91c5204090a17820c0395836bb9b",
+          "bytes": 2101820,
+          "published": true
+        },
+        {
+          "file": "mesh-global.svg",
+          "sha256": "a4685a2e1d31d3e746090044e8832bf7c0a93d64dc18904ab89650831b3bea36",
+          "bytes": 1494466,
+          "published": false
+        },
+        {
+          "file": "mesh-global.pdf",
+          "sha256": "bad47944045a8663c91b794e35c0363f692a29b77f657a637ddc63aaccfc60fb",
+          "bytes": 517042,
+          "published": true
+        }
+      ]
+    },
+    "mesh-poisson": {
+      "caption": "The independent spectral Poisson discretization. (a) Native near field, with equal axis scaling: Chebyshev tensor core in blue and spectral annulus in coral. (b) The complete annulus in (theta,t=log r) coordinates, showing all 34 radial panels of degree 20 and angular degree 80. Graphite dashed lines are actual panel boundaries; adjoining panels share their endpoint node, where derivative continuity is imposed. Every exported grid line is retained. These are distinct from the finite-difference transport grids.",
+      "caption_zh": "独立的谱 Poisson 网格。(a) 等比例原生 (X,Y) 近场：蓝色 Chebyshev 张量核心，珊瑚色谱环带；(b) (θ,t=log r) 坐标下的完整环带。石墨色虚线为实际径向分片边界，相邻片共享端点并施加导数连续条件。未抽样网格线；此网格与输运差分网格相互独立。",
+      "coordinates": "panel a: native X,Y, equal aspect; panel b: theta,t=natural log(r)",
+      "size_inches": [
+        9.0,
+        3.5
+      ],
+      "files": [
+        {
+          "file": "mesh-poisson.png",
+          "sha256": "a4d187fd44b497e907143ef036696f1259ce120e3d369afbccb0071ab2f9be54",
+          "bytes": 549444,
+          "published": true
+        },
+        {
+          "file": "mesh-poisson.svg",
+          "sha256": "56aa98d8d44f4a51b36eff477c1922aa467d6493d5f15f25b2ecc7c5180b6fa5",
+          "bytes": 1837498,
+          "published": false
+        },
+        {
+          "file": "mesh-poisson.pdf",
+          "sha256": "9b827283ee9038694b77d247d63d76651234a53cf5c1d03ebbe9fb470a3cf487",
+          "bytes": 286750,
+          "published": true
+        }
+      ]
+    }
+  },
+  "published_formats": [
+    "png",
+    "pdf"
+  ],
+  "geometry_input": "results/mesh_export_20261022/mesh.mat",
+  "solver_base_commit": "7b26036a65d7f8e5184a9587847079a93005c010",
+  "geometry_verification": {
+    "geometry_helpers_ast_equal": {
+      "vector": true,
+      "visible_nodes": true,
+      "grid_lines": true,
+      "warp": true
+    },
+    "comparison": "exact array equality for all mesh collection vertices/codes and scatter offsets; annotations/layout excluded",
+    "figures": {
+      "mesh-near": {
+        "overview_mesh_vertices_equal": 23387,
+        "detail_matches_original_join_mesh_vertices": 3640,
+        "native_limits_match": true,
+        "equal_aspect_both": true
+      },
+      "mesh-global": {
+        "mapped_mesh_vertices_equal": 166366,
+        "actual_outer_row_verified": true,
+        "same_warp": true
+      }
+    },
+    "other_published_files_byte_identical": {
+      "mesh-join.png": true,
+      "mesh-join.pdf": true,
+      "mesh-poisson.png": true,
+      "mesh-poisson.pdf": true
+    },
+    "input_sha256": "363dedd4f29f2024de1619b24c74cecddc3da1182e97fa0894463ff1afbd34a5",
+    "all_passed": true
+  },
+  "visual_qa": {
+    "color_outputs_inspected": [
+      "mesh-near",
+      "mesh-global"
+    ],
+    "reduced_width_px": 850,
+    "grayscale_and_reduced_size_inspected": true,
+    "publication_color": true,
+    "other_published_figures_byte_identical": [
+      "mesh-join",
+      "mesh-poisson"
+    ]
+  }
+}

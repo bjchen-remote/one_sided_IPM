@@ -65,3 +65,7 @@
 # One immutable input; its content SHA is recorded in data/initial.json.
 !/data/reference/
 !/data/reference/gaussian_t0.mat
+
+# Curated mesh illustrations for repository pages.
+!/docs/figs/*.png
+!/docs/figs/*.pdf

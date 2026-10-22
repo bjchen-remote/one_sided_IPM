@@ -6,3 +6,5 @@
 *.md text eol=lf
 *.tex text eol=lf
 *.mat -text -diff
+*.png -text -diff
+*.pdf -text -diff

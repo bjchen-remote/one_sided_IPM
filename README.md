@@ -4,6 +4,18 @@
 
 [架构与接口](docs/ARCHITECTURE.md) · [网格连接](docs/CONNECTION_METHOD.md) · [算法报告](test/ALGORITHM_REPORT.tex) · [分支与复现](REPOSITORY.md) · [迁移记录](docs/CLEANUP.md) · [本轮验收](docs/VALIDATION.md)
 
+## 网格一览
+
+[![核心张量网格与极坐标环带](docs/figs/mesh-near.png)](docs/figs/mesh-near.pdf)
+
+近场采用均匀张量核心与极坐标环带：蓝色为核心活动网格，珊瑚色为环带活动网格，灰色为三层 ghost，浅灰底为独立演化的活动重叠区。主图保持原生坐标等比例；右侧放大框对应张量核心顶部的真实连接区，实心点为活动节点，空心点为 ghost。
+
+[![从精细核心延伸至超远场的全域多尺度网格](docs/figs/mesh-global.png)](docs/figs/mesh-global.pdf)
+
+核心步长 $h=0.03$，外半径 $R=10^{10}$，两者相差超过 **11 个数量级**。全域图以 $s=\log_{10}(1+r)$ 压缩径向显示，保留全部实际网格线；三个半径标注说明原生尺度，外轮廓是实际最外层网格。该显示变换不代表物理网格含时移动。
+
+点击图片可查看矢量 PDF；[完整图注、配置与复现说明](docs/MESH.md)。
+
 ## 安装与短程计算
 
 需要 MATLAB、Python 3；原生内核需要兼容的 C++ 编译器。MATLAB 在项目根目录执行：
