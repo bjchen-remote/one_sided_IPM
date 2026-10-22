@@ -1,0 +1,19 @@
+{
+  "format": "ipm_cr_shared_dependencies_v1",
+  "files": [
+    "time_evolution/+ipm/+mesh/fdMatrix.m",
+    "time_evolution/+ipm/+field/initialDensity.m",
+    "time_evolution/+ipm/+field/weno5FluxDerivative.m",
+    "time_evolution/+ipm/+evolve/globalSplineMaximum.m",
+    "time_evolution/+ipm/+evolve/wallGradientIntegral.m",
+    "time_evolution/+ipm/+evolve/wallGradientCentroid.m",
+    "time_evolution/+ipm_c/config.m",
+    "time_evolution/+ipm_c/+mesh/build.m",
+    "time_evolution/+ipm_c/+mesh/uniformCoreAxis.m",
+    "time_evolution/+ipm_c/+gauge/initialAuthority.m",
+    "time_evolution/+ipm_c/+gauge/measure.m",
+    "time_evolution/+ipm_c/+gauge/solve.m",
+    "time_evolution/+ipm_c/+gauge/wallDerivative.m",
+    "time_evolution/+ipm_c/+output/sha256.m"
+  ]
+}

@@ -1,6 +1,8 @@
 # `ipm_cr` 混合网格求解器
 
-`test/+ipm_cr` 在均匀 Cartesian 张量核心和不含原点的极坐标环带上推进密度，用独立的谱网格求解 Poisson 方程。当前含时路径为经典显式 RK4、解析背景与残差 `η` 拆分、全部活动点与全部阶段的物理 CFL 限制。原 `time_evolution/+ipm`、`time_evolution/+ipm_c` 提供物理模型、原初值和 I/P/C 参考，本目录不修改它们。
+`main` 分支唯一维护的求解器是 `test/+ipm_cr`：在均匀 Cartesian 张量核心和不含原点的极坐标环带上推进密度，用独立的谱网格求解 Poisson 方程。当前含时路径为经典显式 RK4、解析背景与残差 `η` 拆分、全部活动点与全部阶段的物理 CFL 限制。`time_evolution/+ipm`、`time_evolution/+ipm_c` 在主线仅保留 14 个实际依赖的公共函数，提供物理初值、I/P/C 参考、径向映射及兼容算子；它们保持原路径与原始字节，清单见 [SHARED_DEPENDENCIES.json](SHARED_DEPENDENCIES.json)。
+
+完整 Cartesian、纯极坐标及历史原版算法保存在 [`legacy/solvers` 分支](https://github.com/bjchen-remote/one_sided_IPM/tree/legacy/solvers)，迁移前完整源码为提交 [`2010a4e`](https://github.com/bjchen-remote/one_sided_IPM/tree/2010a4e2e0714eb092ee0a6207e834b52844ced8)。主线保留当前包路径，历史结果和冻结 runtime 的数值身份不随分支整理改变。
 
 最新已完成的证据是启用固定远区径向重分配的 **τ10 三层采样自收敛**：`W/q/F/Q/u1-Uref/u1/u2` 的观测阶分别为 `4.577/4.714/4.479/4.00569/4.619/4.506/4.078`。`Q` 刚超过四阶，需要更细一级检验渐近趋势。中层缩步和固定末态 Poisson 加密均已完成；最细层缩步、连续全域误差上界、新路径 τ200 及等精度速度比较尚未建立。
 
@@ -41,7 +43,7 @@ python3 test/run_explicit_experiment.py status \
   --output "$PWD/test/results/my_frozen_run"
 ```
 
-管理器冻结包、入口、配置及原始 authority，单线程运行，约束 RSS、可用内存、磁盘和总时间，记录每段 MATLAB 与监督进程耗时。`resume` 使用原任务记录中的绝对截止时间，过期任务不会因再次调用自动延长。额外预算应单独记录，保留原任务账本。
+管理器冻结当前包、入口、配置及原始 authority；公共支持函数只按 [依赖清单](SHARED_DEPENDENCIES.json) 核验并复制，不再复制完整旧求解器。管理器单线程运行，约束 RSS、可用内存、磁盘和总时间，记录每段 MATLAB 与监督进程耗时。`resume` 使用原任务记录中的绝对截止时间，过期任务不会因再次调用自动延长。额外预算应单独记录，保留原任务账本。
 
 ## 读取数据与绘图
 
@@ -90,10 +92,18 @@ plot_ipm_cr_redistribution_convergence([],[],[], ...
 | 连接和径向重分配 | [`test_ipm_cr_connection_operators`](tests/test_ipm_cr_connection_operators.m)、[`test_ipm_cr_radial_redistribution`](tests/test_ipm_cr_radial_redistribution.m) |
 | RK4 输运制造解与真实短窗时间加密 | [`test_ipm_cr_fourth_order`](tests/test_ipm_cr_fourth_order.m) |
 | 原初值三层完整轨道 | [`test_ipm_cr_ivp_spatial`](tests/test_ipm_cr_ivp_spatial.m) |
-| 维护重构等价回归 | [`test_ipm_cr_refactor`](tests/test_ipm_cr_refactor.m)；检验完整 RHS、公共采样与短 RK 轨道的逐字段等价 |
-| 固定状态源、Poisson 与成本诊断 | [`inspect_ipm_cr_explicit_initial`](tests/inspect_ipm_cr_explicit_initial.m)、[`inspect_ipm_cr_explicit_endpoint`](tests/inspect_ipm_cr_explicit_endpoint.m)、[`profile_ipm_cr_rhs`](tests/profile_ipm_cr_rhs.m) |
+| 维护重构等价回归 | [`test_ipm_cr_refactor`](tests/test_ipm_cr_refactor.m)；需另行提供清理前 baseline MAT，检验完整 RHS、公共采样与短 RK 轨道的逐字段等价 |
+| 固定末态 Poisson 与成本诊断 | [`inspect_ipm_cr_explicit_endpoint`](tests/inspect_ipm_cr_explicit_endpoint.m)、[`profile_ipm_cr_rhs`](tests/profile_ipm_cr_rhs.m) |
 
-`linear5` 为默认重构，`smoothSpeedCoefficient=.1`。`smooth_weno5` 使用同一内核的平滑 WENO-Z 权重，`legacy_weno5` 保留旧算子诊断路径；选项变化需要单独验证。构建不选择重构模式，要求 MEX 的模式缺少兼容内核时明确报错。`main_cr.m`、`run_validation.py` 仅为独立椭圆入口；SSPRK3 不属于当前默认 RK4 主链。`prototypes/` 是仍在使用的并行稳态加速研发区，跨目录依赖与研究记录保持独立，本轮不清理或改写。
+下列入口依赖完整纯极坐标求解器或专属冻结实验，仅保留在 `legacy/solvers`，不属于主线运行或验证入口：
+
+| 历史入口 | 旧分支中的位置 |
+|---|---|
+| 初态 hybrid / 纯极坐标及 CFL 对照 | [`test/tests/inspect_ipm_cr_explicit_initial.m`](https://github.com/bjchen-remote/one_sided_IPM/blob/legacy/solvers/test/tests/inspect_ipm_cr_explicit_initial.m) |
+| 历史 hybrid / 纯极坐标 τ200 对照 | [`test/tests/compare_ipm_cr_explicit_tau200.m`](https://github.com/bjchen-remote/one_sided_IPM/blob/legacy/solvers/test/tests/compare_ipm_cr_explicit_tau200.m) |
+| 历史 τ10 径向诊断图 | [`test/plots/plot_ipm_cr_tau10_radial_diagnostic.m`](https://github.com/bjchen-remote/one_sided_IPM/blob/legacy/solvers/test/plots/plot_ipm_cr_tau10_radial_diagnostic.m) |
+
+`linear5` 为默认重构，`smoothSpeedCoefficient=.1`。`smooth_weno5` 使用同一内核的平滑 WENO-Z 权重，`legacy_weno5` 保留兼容算子诊断路径；选项变化需要单独验证。构建不选择重构模式，要求 MEX 的模式缺少兼容内核时明确报错。`main_cr.m`、`run_validation.py` 仅为独立椭圆入口；SSPRK3 不属于当前默认 RK4 主链。`test/prototypes/` 与根目录 `experiments/` 是仍在使用的独立研究区，本地文件及跨目录依赖保留，继续排除在 Git 主线之外。
 
 ## 结果与文档
 
@@ -107,7 +117,7 @@ plot_ipm_cr_redistribution_convergence([],[],[], ...
 
 三层接受步数为 `764/1523/3115`，与原网格相同；MATLAB 累计耗时为 `83.56/260.30/1349.08 s`，单步成本增加。该结果没有建立等误差速度优势，也不保证 50 分钟内完成 τ200。原始三层报告的 `fullIVPShortWindowQualified=false` 和最细层时间控制缺失保持原义，后续分项控制不改写冻结报告。
 
-本轮整理保留 `sampleState` 公共读出并消除空间研究中的重复采样。差分模板缓存候选虽然通过逐位等价回归，中层局部计时却由旧实现中位数 `3.96452 ms` 增至 `4.20885 ms`，因此已撤回；候选源码与记录保存在 [本轮维护证据](results/cleanup_20261022)。该微基准不代表完整 RHS 或整机加速。
+分支整理前的数值维护保留 `sampleState` 公共读出并消除空间研究中的重复采样。差分模板缓存候选虽然通过逐位等价回归，中层局部计时却由旧实现中位数 `3.96452 ms` 增至 `4.20885 ms`，因此已撤回；候选源码与记录保存在 [维护证据](results/cleanup_20261022)。该微基准不代表完整 RHS 或整机加速。
 
 算法推导和验证边界见 [算法报告](ALGORITHM_REPORT.tex)；模块、数据和缓存契约见 [架构说明](ARCHITECTURE.md)；网格连接构造与误差预算见 [连接方法](CONNECTION_METHOD.md)；历史代码归档与恢复见 [清理记录](CLEANUP.md)。
 

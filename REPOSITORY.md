@@ -1,46 +1,48 @@
-# 源码仓库与复现边界
+# 主分支、旧分支与复现边界
 
-本仓库管理单侧 IPM 的维护源码、测试、原生内核源码和算法文档。Git 边界由根目录 `.gitignore` 明确约束；本地未跟踪文件保持原位，不因初始化仓库而删除。
+`main` 以 `ipm_cr` 为唯一维护求解器。旧算法保存在 [`legacy/solvers`](https://github.com/bjchen-remote/one_sided_IPM/tree/legacy/solvers)，迁移点为 `2010a4e2e0714eb092ee0a6207e834b52844ced8`。该旧分支保留当时全部 595 个跟踪文件，也含迁移前的混合网格源码，方便复现跨算法对照。
 
-## 代码入口
+## 旧算法归属
 
-| 路径 | 用途 |
+| 旧分支中的路径 | 算法或用途 |
 |---|---|
-| `time_evolution/+ipm`、`time_evolution/main.m` | Cartesian 时间演化维护版 |
-| `time_evolution/+ipm_c`、`time_evolution/main_c.m` | 极坐标维护版 |
-| `test/+ipm_cr`、`test/tests/run_ipm_cr_explicit.m` | 张量核心与极坐标环带的混合网格显式求解器 |
-| `test/ALGORITHM_REPORT.tex` | 混合网格算法报告，中文独立 LaTeX 源文件 |
-| `test/ARCHITECTURE.md`、`test/CONNECTION_METHOD.md` | 模块契约、网格连接与误差预算 |
-| `main.m`、`solver/` | 历史原版与历史分析代码，不能代替当前维护版的验证 |
-| `plotting/` | 已保存轨道的读取和绘图示例 |
+| 根 `main.m`、`solver/` | 历史 Cartesian 原版及历史稳态分析 |
+| `time_evolution/main.m`、完整 `+ipm` | Cartesian、实用规范、SDIRK2、重网格与旧验证 |
+| `time_evolution/main_c.m`、完整 `+ipm_c` | 纯极坐标、B 样条 Poisson、SSPRK3 与径向自适应 |
+| `time_evolution/server`、旧运行管理器和旧测试 | 上述旧求解器的运行、部署与验证 |
+| 根 `plotting/` | 纯极坐标保存数据的读取和示例 |
+| `test/tests/inspect_ipm_cr_explicit_initial.m` | 包含完整旧纯极坐标初始化的初态对照 |
+| `test/tests/compare_ipm_cr_explicit_tau200.m` | 历史 hybrid/polar τ200 轨道比较 |
+| `test/plots/plot_ipm_cr_tau10_radial_diagnostic.m` | 绑定历史冻结 runtime 的诊断绘图 |
 
-运行需求为 MATLAB 和 Python 3。Python 管理器的解释器与 MATLAB 路径需按本机设置；部分资源监控及直接 CLT 构建接口限 macOS。原生 MEX 二进制不入库，C++ 源码及构建入口入库。混合路径需要兼容的 MEX 时，可在 MATLAB 中执行：
+本地旧文件保持原位，但在 `main` 中不跟踪，避免影响并行研究。直接在这个共享工作区切换旧分支可能遇到本地忽略文件冲突；要运行旧算法，优先克隆旧分支到独立目录：
 
-```matlab
-addpath('test','test/tests','time_evolution');
-build_ipm_cr_native; % 在当前平台构建，并将日志写入独立结果目录
+```sh
+git clone --branch legacy/solvers --single-branch https://github.com/bjchen-remote/one_sided_IPM.git one_sided_IPM_legacy
 ```
 
-求解器使用方法和测试入口分别见 [维护版说明](time_evolution/README.md)、[极坐标说明](time_evolution/IPM_C.md)与[混合网格说明](test/README.md)。请勿同时将历史 `solver/+ipm` 和维护 `time_evolution/+ipm` 放在 MATLAB 路径前端，以免同名包相互遮蔽。
+## 主分支的公共依赖
 
-## 必须随源码保存的初始输入
+`test/SHARED_DEPENDENCIES.json` 明确列出 14 个仍需调用的公共函数。保留其原 namespace 和相对路径，不改函数内容：有限差分矩阵、原初值、原 I/P/C 泛函、径向网格、原始 authority、规范测量与求根种子，以及 SHA-256。其中 MATLAB WENO5 只供仍支持的显式兼容选项。
 
-默认极坐标与混合初始化读取：
+`time_evolution/+ipm`、`+ipm_c` 在主分支中是公共支持子集，不是可独立运行的旧求解器。请勿把旧分支的完整包加入当前 MATLAB 路径。Python 冻结器只复制清单内文件，防止本地忽略的旧源码混入新实验。
+
+## 构建与初始输入
+
+主入口和构建见 [README](README.md)，含时用法、测试地图和精度边界见 [test/README](test/README.md)。MEX 二进制不入库，C++ 源码和构建入口保留。Python 管理器的 MATLAB 路径需按本机设置；部分资源监控与直接 CLT 构建仅适用 macOS。
+
+默认初始化读取下列原始 τ0 authority，约 4.35 MiB，是唯一随 Git 保存的运行数据：
 
 ```text
 runs/local_validation_20261013/gaussian26_fresh_warm_01/data_frames/frame_step000000000000_tau0000000000000000.mat
 ```
 
-该约 4.35 MiB 的文件是原始 τ0 数值 authority，作为唯一运行数据例外随 Git 保存。保持原路径可避免改变数值源码与历史输入身份。其他检查点、轨道和 `data.mat` 不入库。
+保持原路径可避免改变数值定义及输入身份。其 SHA-256 为 `fa80e7d2b4fedb6b28186dcaee844975569fac41da06d26b35a2519d7521db22`。
 
-## 不纳入 Git 的内容
+## 本地数据与历史证据
 
-`skills/`、`AGENTS.md`、`agent.m`、`.codex/` 等 AI 脚手架不属于求解器。当前维护源没有对它们的运行依赖。冻结源码、运行结果、日志、锁、MEX 编译物、本机缓存和大型实验输出均忽略；`experiments/`、`test/prototypes/` 的活跃研究代码本轮保持独立，本地保留。
+AI 脚手架、检查点、轨道、日志、锁、编译产物和大型输出不入库；`experiments/`、`test/prototypes/` 的并行研发保留本地，不作为本次分支整理的删除目标。
 
-`test/run_explicit_experiment.py`、`test/run_validation.py` 与维护目录的 `run_*.py` 是数值实验管理器，提供资源限制、源码冻结、日志和续算能力，因此保留。
+文档中指向 `results/`、`output/`、历史 `runs/` 或 `releases/` 的链接表示本地历史证据，克隆源码后不一定存在。旧轨道绘图、历史审核及 `test_ipm_cr_refactor` 所需 baseline MAT 必须另行提供。历史报告保持原路径和原实验结论；它们不表示主分支仍维护整套旧算法。恢复旧实验时应使用其冻结源码或相应旧分支。
 
-## 验证证据的范围
-
-文档中指向 `results/`、`output/`、历史 `runs/` 或 `releases/` 的链接表示本地历史证据，它们不随本源码仓库上传；克隆后这些链接可能缺少目标文件。读取旧轨道、重画历史对比图或运行需要外部检查点的审核时，必须另行提供对应输入。`test_ipm_cr_refactor` 还要求清理前的 baseline MAT，不能作为克隆后无需额外输入的测试。
-
-算法报告区分已有 τ10 采样精度证据、固定端点诊断和仍未完成的控制。源码管理不新增 τ200 精度认证或运行时间保证。数值实验会创建独立输出目录，输出文件不会自动成为版本管理对象。
+本次整理不改变数值方程、RK4、CFL、连接、Poisson 或兼容算子的数学实现，也不新增全局精度或长时间性能认证。

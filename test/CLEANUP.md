@@ -1,5 +1,13 @@
 # 活动代码清理记录
 
+## 2026-10-22：Git 主线与旧算法分离
+
+`main` 以 `ipm_cr` 为唯一维护求解器；完整旧算法保留于 [legacy/solvers](https://github.com/bjchen-remote/one_sided_IPM/tree/legacy/solvers)，对应迁移前提交 `2010a4e2e0714eb092ee0a6207e834b52844ced8`。根历史原版、旧 Cartesian/纯极坐标入口、各自测试与绘图，以及三个依赖旧运行环境的对照入口不再由主分支跟踪。本地文件保持原位，不作物理删除。
+
+主线保留 [SHARED_DEPENDENCIES.json](SHARED_DEPENDENCIES.json) 声明的 14 个公共函数，原路径和函数内容均不变；冻结管理器与含时入口按清单记录实际共享输入，避免将本地保留的完整旧包混入新实验。当前数值方法和兼容算子不因分支整理改变。下面较早的“保留”记录描述的是各次整理当时的范围；当前 Git 归属以本节及根 [REPOSITORY.md](../REPOSITORY.md) 为准。
+
+本次从暂存区导出 82 个主线文件，在无完整旧求解器的干净 MATLAB 路径上重建原生内核，完成局部数学检查、独立椭圆演示、两种径向网格短 RK4 轨道的逐位回归，以及双槽检查点续算到 τ=.006。均通过；数值阶段合计约 9.23 秒，仅为维护验证耗时，不是长轨道性能测量。两个 Python 管理器的 prepare-only 打包检查也通过。详细本地证据见 `results/branch_split_20261022/clean_validation/validation.json`。
+
 本文件记录从维护面移出的依赖闭包、归档核验和恢复方式。旧结果、检查点、原始 authority、冻结 runtime 以及 `time_evolution/+ipm/+ipm_c` 保持原身份。代码优化与等价性验证另外记录，不把代码清理计为新的数值精度证据。
 
 ## 2026-10-22：当前 RK4 维护面整理

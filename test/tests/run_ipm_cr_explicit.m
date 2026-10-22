@@ -292,10 +292,27 @@ end
 function files=source_inventory(root)
 trees={fullfile(root,'test','+ipm_cr','+explicit'),fullfile(root,'test','+ipm_cr','+core'), ...
     fullfile(root,'test','+ipm_cr','+polar'),fullfile(root,'test','+ipm_cr','+internal'), ...
-    fullfile(root,'test','+ipm_cr','+carrier'),fullfile(root,'time_evolution','+ipm'), ...
-    fullfile(root,'time_evolution','+ipm_c')};
+    fullfile(root,'test','+ipm_cr','+carrier')};
 paths={mfilename('fullpath'),fullfile(root,'test','+ipm_cr','Solver.m'),fullfile(root,'test','+ipm_cr','config.m')};
 paths{1}=[paths{1},'.m'];
+sharedManifest=fullfile(root,'test','SHARED_DEPENDENCIES.json');
+shared=jsondecode(fileread(sharedManifest));
+assert(isfield(shared,'format')&&isfield(shared,'files')&& ...
+    strcmp(shared.format,'ipm_cr_shared_dependencies_v1'), ...
+    'ipm_cr:SharedManifest','Use the declared shared dependency manifest.');
+sharedPaths=cellstr(string(shared.files));
+assert(~isempty(sharedPaths)&&numel(unique(sharedPaths))==numel(sharedPaths), ...
+    'ipm_cr:SharedManifest','Shared dependency paths must be nonempty and unique.');
+paths{end+1}=sharedManifest;
+for k=1:numel(sharedPaths)
+    relative=sharedPaths{k};parts=strsplit(relative,'/');
+    assert(startsWith(relative,'time_evolution/')&& ...
+        ~any(ismember(parts,{'','..','.'}))&&~contains(relative,'\'), ...
+        'ipm_cr:SharedManifest','Shared dependency paths must stay inside the project.');
+    path=fullfile(root,parts{:});
+    assert(isfile(path),'ipm_cr:SharedManifest','Missing shared dependency %s.',relative);
+    paths{end+1}=path; %#ok<AGROW>
+end
 for k=1:numel(trees)
     listing=dir(fullfile(trees{k},'**','*.m'));
     for j=1:numel(listing),paths{end+1}=fullfile(listing(j).folder,listing(j).name);end %#ok<AGROW>

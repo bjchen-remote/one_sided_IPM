@@ -1,6 +1,6 @@
 # `ipm_cr` 架构与接口契约
 
-本文说明当前维护实现的模块边界、数据、缓存和失败行为。使用入口与证据索引见 [README](README.md)，离散推导与实验解释见 [算法报告](ALGORITHM_REPORT.tex)，网格连接构造及误差预算见 [CONNECTION_METHOD](CONNECTION_METHOD.md)。
+本文说明 `main` 分支唯一维护求解器 `ipm_cr` 的模块边界、数据、缓存和失败行为。使用入口与证据索引见 [README](README.md)，离散推导与实验解释见 [算法报告](ALGORITHM_REPORT.tex)，网格连接构造及误差预算见 [CONNECTION_METHOD](CONNECTION_METHOD.md)。
 
 ## 1. 模块边界
 
@@ -17,9 +17,11 @@ run_ipm_cr_explicit                 运行身份、预算、检查点、历史
   sampleState                      接受态的公共查询，只读重建
 ```
 
-`time_evolution/+ipm`、`+ipm_c` 是共享依赖，提供物理初值、原墙积分和参考、原径向映射以及兼容旧算子。本包不修改其物理定义。`main_cr.m`、`run_validation.py` 只调用独立椭圆模块；它们不推进含时系统。
+主线的 `time_evolution/+ipm`、`+ipm_c` 仅保留 14 个实际共享依赖，提供物理初值、原墙积分和参考、原径向映射以及兼容算子。[SHARED_DEPENDENCIES.json](SHARED_DEPENDENCIES.json) 明确其原路径与 SHA-256；公共函数字节不改，不在主线保留完整 Cartesian 或纯极坐标求解器。保留路径是为了维持当前调用关系、authority 和冻结机制，而不表示旧求解器仍为主线维护对象。`main_cr.m`、`run_validation.py` 只调用独立椭圆模块；它们不推进含时系统。
 
-`prototypes/` 保留并行稳态加速研究及其跨目录依赖，不参与默认 RK4 运行，也不能因目录名或暂未收敛而删除。维护清理只移出已查明无当前调用的历史专属入口。
+完整旧 Cartesian、纯极坐标及根 `main.m` / `solver/` 历史原版在 [`legacy/solvers` 分支](https://github.com/bjchen-remote/one_sided_IPM/tree/legacy/solvers) 保存；迁移前完整提交为 [`2010a4e`](https://github.com/bjchen-remote/one_sided_IPM/tree/2010a4e2e0714eb092ee0a6207e834b52844ced8)。需要完整纯极坐标实现的 `inspect_ipm_cr_explicit_initial.m`、`compare_ipm_cr_explicit_tau200.m` 及专属冻结实验绘图 `plot_ipm_cr_tau10_radial_diagnostic.m` 仅在该旧分支保留，历史位置索引见 [README](README.md#源码与验证地图)。
+
+`test/prototypes/` 和根目录 `experiments/` 保留并行研究及跨目录依赖，不参与默认 RK4 运行，继续独立忽略。本地活跃研究文件不因分支整理而删除。当前包仍位于 `test/+ipm_cr`，本轮不改变数值模块、函数名或包层级。
 
 谱 Poisson 与输运是两套网格。谱配点的端点聚集不进入输运 CFL，输运环带不含原点。`+carrier/localMap.m`、`tensorMap.m` 仅保留仍被当前连接和源映射使用的局部插值功能。
 
@@ -136,12 +138,12 @@ Newton 目标为 `16eps`，线搜索停滞且残差不超过 `2e-12` 时允许�
 
 运行器在每段开始核验维护源 SHA、原始 authority 及数值选项。接受检查点包含完整状态、几何、原墙参考、实际方法、历史和来源；双槽写完、读回并核验 SHA 后才原子更新 `latest.json`。失败文件不成为恢复指针。恢复可重建几何缓存，但不能省略 `η`、尺度、尾项参数、时钟低位或原始规范。
 
-Python 管理器复制运行依赖到独立 runtime，并监督同一 MATLAB 入口。时间预算、停止、资源中止、求解失败和达到目标分别记录；累计 MATLAB 成本与包含启停的监督成本分别报告。旧结果和冻结 runtime 保留其原 SHA，当前重构的等价回归不改写历史实验身份。
+Python 管理器复制当前包、入口、配置及 authority 到独立 runtime；`time_evolution` 公共支持只按 [SHARED_DEPENDENCIES.json](SHARED_DEPENDENCIES.json) 核验、冻结，不遍历复制完整旧算法。依赖清单本身纳入运行身份，恢复继续核验原冻结清单及源码。管理器监督同一 MATLAB 入口，分别记录时间预算、停止、资源中止、求解失败和达到目标；累计 MATLAB 成本与包含启停的监督成本分别报告。旧结果和冻结 runtime 保留其原 SHA，当前分支整理不改写历史实验身份。
 
 ## 8. 维护与证据分工
 
 `README` 提供当前入口、运行示例、验证地图及最新结果链接；本文保持实现契约；`CONNECTION_METHOD` 维护连接构造与误差预算；算法报告写连续方程到离散的推导、实验数据及适用范围；`CLEANUP` 记录退出维护面的文件闭包、归档和恢复。
 
-本轮维护只保留 `sampleState` 统一读出与研究入口去重复。曾尝试的差分模板缓存通过逐位回归，但中层局部计时约慢 6%，已恢复原 `geometry/differentiate`，候选实现与基准作为未采用优化证据保存于 [清理目录](results/cleanup_20261022)。局部计时不能代替完整 RHS 或整轨道成本比较，本轮不声称整机加速。
+分支整理前的数值维护只保留 `sampleState` 统一读出与研究入口去重复。曾尝试的差分模板缓存通过逐位回归，但中层局部计时约慢 6%，已恢复原 `geometry/differentiate`，候选实现与基准作为未采用优化证据保存于 [清理目录](results/cleanup_20261022)。本轮分支整理保留数值源码字节；局部计时不能代替完整 RHS 或整轨道成本比较，不声称整机加速。
 
 验证按改动选择：几何/常数/制造解 → 连接和完整 RHS → 短程时间/空间对照 → 固定端点谱加密 → 完整轨道。名义五阶重构、四阶 RK、很小的求解残差、长时间稳定运行或两条数值轨道相近，均不能单独认证全局精度。τ10 三层采样观测、最细层时间控制缺失及 τ200 未验证的当前边界，集中记录于 README 与算法报告，不在本架构文档重复维护实验叙事。

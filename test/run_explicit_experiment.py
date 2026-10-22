@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Frozen-source supervisor for the actual mixed-grid explicit IPM trajectory."""
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import argparse
 import datetime as dt
 import fcntl
@@ -17,6 +17,7 @@ import time
 HERE = Path(__file__).resolve().parent
 MATLAB = '/Applications/MATLAB_R2026a.app/bin/matlab'
 AUTHORITY = Path('runs/local_validation_20261013/gaussian26_fresh_warm_01/data_frames/frame_step000000000000_tau0000000000000000.mat')
+SHARED_MANIFEST = Path('test/SHARED_DEPENDENCIES.json')
 
 
 def now():
@@ -33,6 +34,33 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def shared_dependencies(project):
+    """Resolve the declared shared inputs without scanning legacy packages."""
+    project = project.resolve()
+    manifest_bytes = (project / SHARED_MANIFEST).read_bytes()
+    manifest = json.loads(manifest_bytes)
+    if not isinstance(manifest, dict) or manifest.get('format') != 'ipm_cr_shared_dependencies_v1':
+        raise ValueError('Unsupported shared dependency manifest format')
+    entries = manifest.get('files')
+    if not isinstance(entries, list) or not entries:
+        raise ValueError('Shared dependencies must be a nonempty list')
+    files, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, str) or not entry:
+            raise ValueError('Shared dependency paths must be nonempty strings')
+        relative = PurePosixPath(entry)
+        if relative.is_absolute() or '..' in relative.parts or relative.as_posix() != entry:
+            raise ValueError('Use canonical project-relative dependency paths: ' + entry)
+        source = (project / entry).resolve()
+        if not source.is_relative_to(project) or not source.is_file():
+            raise ValueError('Shared dependency is missing or outside the project: ' + entry)
+        if source in seen:
+            raise ValueError('Duplicate shared dependency: ' + entry)
+        seen.add(source)
+        files.append(Path(entry))
+    return files, hashlib.sha256(manifest_bytes).hexdigest()
+
+
 def quote(path):
     return str(path).replace("'", "''")
 
@@ -45,20 +73,30 @@ def available_memory():
 
 
 def prepare(folder, args):
+    project = HERE.parent
+    shared, manifest_hash = shared_dependencies(project)
+    shared_inputs = [SHARED_MANIFEST, *shared]
+    shared_hashes = {str(path): sha(project / path) for path in shared_inputs}
+    if shared_hashes[str(SHARED_MANIFEST)] != manifest_hash:
+        raise RuntimeError('Shared dependency manifest changed while being read')
     folder.mkdir(parents=True, exist_ok=False)
     runtime = folder / 'runtime'
     (runtime / 'test/tests').mkdir(parents=True)
-    (runtime / 'time_evolution').mkdir()
-    for package in ('+ipm', '+ipm_c'):
-        shutil.copytree(HERE.parent / 'time_evolution' / package, runtime / 'time_evolution' / package)
+    for path in shared_inputs:
+        target = runtime / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(project / path, target)
     shutil.copytree(HERE / '+ipm_cr', runtime / 'test/+ipm_cr')
     for name in ('run_ipm_cr_explicit.m',):
         source = HERE / 'tests' / name
         if source.is_file():
             shutil.copy2(source, runtime / 'test/tests' / name)
     (runtime / AUTHORITY).parent.mkdir(parents=True)
-    shutil.copy2(HERE.parent / AUTHORITY, runtime / AUTHORITY)
+    shutil.copy2(project / AUTHORITY, runtime / AUTHORITY)
     shutil.copy2(__file__, folder / 'supervisor.py')
+    for path, expected in shared_hashes.items():
+        if sha(project / path) != expected or sha(runtime / path) != expected:
+            raise RuntimeError('Shared input changed while preparing the runtime: ' + path)
     inventory = [dict(path=str(p.relative_to(folder)), sha256=sha(p))
                  for p in sorted(runtime.rglob('*')) if p.is_file()]
     options = json.loads(args.options.read_text()) if args.options else {}
@@ -72,6 +110,8 @@ def prepare(folder, args):
         targetTau=args.target, createdUtc=now(), deadlineUtc=deadline.isoformat(),
         segmentSeconds=args.segment_seconds, threads=1, rssLimitBytes=2 * 1024**3,
         minimumFreeDiskBytes=8 * 1024**3, sourceFrozen=True,
+        sharedDependencyManifest=dict(path=str(SHARED_MANIFEST),
+                                      sha256=shared_hashes[str(SHARED_MANIFEST)], fileCount=len(shared)),
         timeIntegrator=options.get('timeIntegrator', 'rk4'), timeControl='all_active_both_patches_all_stages_physical_CFL',
         implicitStages=0, polarOriginPresent=False, trajectoryAccuracyCertified=False,
         options=options, segments=[]))
@@ -217,12 +257,19 @@ def main():
     parser.add_argument('--target', type=float, default=200)
     parser.add_argument('--hours', type=float, default=50/60)
     parser.add_argument('--segment-seconds', type=float, default=600)
+    parser.add_argument('--prepare-only', action='store_true',
+                        help='Prepare and verify a new frozen runtime without dispatching MATLAB')
     args = parser.parse_args()
+    if args.prepare_only and args.action != 'start':
+        parser.error('--prepare-only is only valid with start')
     folder = args.output.resolve()
     if args.action == 'start':
         assert args.target > 0 and args.hours > 0 and args.segment_seconds > 0
         prepare(folder, args)
-        dispatch(folder)
+        if args.prepare_only:
+            print(json.dumps(dict(status='prepared', output=str(folder), dispatched=False)), flush=True)
+        else:
+            dispatch(folder)
     elif args.action == 'resume':
         assert not (folder / 'STOP').exists() and not (folder / 'native/STOP').exists()
         dispatch(folder)

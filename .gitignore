@@ -1,26 +1,37 @@
-# Track maintained sources, documentation, tests and the original tau=0 fixture.
-# Local experiments, frozen runtimes and AI tooling remain outside the repository.
+# main maintains ipm_cr. Full historical solvers live on legacy/solvers.
+# Retired files stay local but are excluded from this branch.
 /*
 !/.gitignore
 !/.gitattributes
 !/README.md
 !/REPOSITORY.md
-!/main.m
-!/solver/
-!/plotting/
 !/time_evolution/
 !/test/
 
-/time_evolution/*
+/time_evolution/**
 !/time_evolution/+ipm/
 !/time_evolution/+ipm_c/
-!/time_evolution/server/
-!/time_evolution/tests/
-!/time_evolution/tests_ipm_c/
-!/time_evolution/*.m
-!/time_evolution/*.md
-!/time_evolution/run_*.py
-!/time_evolution/TEST_FIXTURE_PROVENANCE.json
+!/time_evolution/+ipm/+mesh/
+!/time_evolution/+ipm/+field/
+!/time_evolution/+ipm/+evolve/
+!/time_evolution/+ipm_c/+mesh/
+!/time_evolution/+ipm_c/+gauge/
+!/time_evolution/+ipm_c/+output/
+!/time_evolution/+ipm/+mesh/fdMatrix.m
+!/time_evolution/+ipm/+field/initialDensity.m
+!/time_evolution/+ipm/+field/weno5FluxDerivative.m
+!/time_evolution/+ipm/+evolve/globalSplineMaximum.m
+!/time_evolution/+ipm/+evolve/wallGradientIntegral.m
+!/time_evolution/+ipm/+evolve/wallGradientCentroid.m
+!/time_evolution/+ipm_c/config.m
+!/time_evolution/+ipm_c/+mesh/build.m
+!/time_evolution/+ipm_c/+mesh/uniformCoreAxis.m
+!/time_evolution/+ipm_c/+gauge/initialAuthority.m
+!/time_evolution/+ipm_c/+gauge/measure.m
+!/time_evolution/+ipm_c/+gauge/solve.m
+!/time_evolution/+ipm_c/+gauge/wallDerivative.m
+!/time_evolution/+ipm_c/+output/sha256.m
+!/time_evolution/README.md
 
 /test/*
 !/test/+ipm_cr/
@@ -30,6 +41,10 @@
 !/test/*.py
 !/test/*.md
 !/test/*.tex
+!/test/SHARED_DEPENDENCIES.json
+/test/tests/inspect_ipm_cr_explicit_initial.m
+/test/tests/compare_ipm_cr_explicit_tau200.m
+/test/plots/plot_ipm_cr_tau10_radial_diagnostic.m
 
 # Generated output, local state and native build products.
 **/runs/

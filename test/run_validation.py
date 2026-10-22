@@ -5,7 +5,7 @@ import datetime as dt
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import signal
 import subprocess
 import time
@@ -15,25 +15,58 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def shared_dependencies(project):
+    """Resolve the declared shared inputs without scanning legacy packages."""
+    project = project.resolve()
+    manifest_bytes = (project / 'test/SHARED_DEPENDENCIES.json').read_bytes()
+    manifest = json.loads(manifest_bytes)
+    if not isinstance(manifest, dict) or manifest.get('format') != 'ipm_cr_shared_dependencies_v1':
+        raise ValueError('Unsupported shared dependency manifest format')
+    entries = manifest.get('files')
+    if not isinstance(entries, list) or not entries:
+        raise ValueError('Shared dependencies must be a nonempty list')
+    files, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, str) or not entry:
+            raise ValueError('Shared dependency paths must be nonempty strings')
+        relative = PurePosixPath(entry)
+        if relative.is_absolute() or '..' in relative.parts or relative.as_posix() != entry:
+            raise ValueError('Use canonical project-relative dependency paths: ' + entry)
+        source = (project / entry).resolve()
+        if not source.is_relative_to(project) or not source.is_file():
+            raise ValueError('Shared dependency is missing or outside the project: ' + entry)
+        if source in seen:
+            raise ValueError('Duplicate shared dependency: ' + entry)
+        seen.add(source)
+        files.append(project / entry)
+    return files, hashlib.sha256(manifest_bytes).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--matlab', default='/Applications/MATLAB_R2026a.app/bin/matlab')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--timeout', type=int, default=180)
+    parser.add_argument('--prepare-only', action='store_true',
+                        help='Write the validation input receipt without launching MATLAB')
     args = parser.parse_args()
     folder = Path(__file__).resolve().parent
+    manifest = folder / 'SHARED_DEPENDENCIES.json'
+    originals, manifest_hash = shared_dependencies(folder.parent)
     stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     output = (args.output or folder / 'results' / stamp).resolve()
     output.mkdir(parents=True, exist_ok=False)
-    originals = list((folder.parent / 'time_evolution' / '+ipm').rglob('*.m'))
-    originals += list((folder.parent / 'time_evolution' / '+ipm_c').rglob('*.m'))
     before = {str(p): digest(p) for p in originals}
     inputs = list((folder / '+ipm_cr').rglob('*.m'))
-    inputs += list((folder / 'tests').rglob('*.m')) + [folder / 'main_cr.m', Path(__file__).resolve()]
+    inputs += list((folder / 'tests').rglob('*.m')) + [folder / 'main_cr.m', Path(__file__).resolve(), manifest]
     receipt = dict(status='prepared', startedUtc=dt.datetime.now(dt.timezone.utc).isoformat(),
                    threads=1, hardWallSeconds=args.timeout,
                    inputHashes={str(p.relative_to(folder)): digest(p) for p in inputs},
-                   productionSourceHashes=before, trajectoryAdvanced=False)
+                   productionSourceHashes=before, trajectoryAdvanced=False,
+                   sharedDependencyManifest=dict(path='test/SHARED_DEPENDENCIES.json',
+                                                 sha256=manifest_hash, fileCount=len(originals)))
+    if receipt['inputHashes']['SHARED_DEPENDENCIES.json'] != manifest_hash:
+        raise RuntimeError('Shared dependency manifest changed while being read')
 
     def persist():
         (output / 'execution.json').write_text(json.dumps(receipt, indent=2) + '\n')
@@ -47,6 +80,9 @@ def main():
                "',struct('includeIsolatedRefinement',true));assert(r.passed);[~,~,d]=main_cr;assert(d.accepted);"]
     receipt['command'] = command
     persist()
+    if args.prepare_only:
+        print(json.dumps(dict(status='prepared', output=str(output), matlabLaunched=False)))
+        return
     start = time.monotonic()
     child = None
     try:
