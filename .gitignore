@@ -1,54 +1,23 @@
-# main maintains ipm_cr. Full historical solvers live on legacy/solvers.
-# Retired files stay local but are excluded from this branch.
+# Main contains the current ipm_cr solver. Old local work stays untracked.
 /*
 !/.gitignore
 !/.gitattributes
 !/README.md
 !/REPOSITORY.md
-!/time_evolution/
+!/src/
+!/tests/
+!/tools/
+!/examples/
+!/docs/
+!/data/
 !/test/
-
-/time_evolution/**
-!/time_evolution/+ipm/
-!/time_evolution/+ipm_c/
-!/time_evolution/+ipm/+mesh/
-!/time_evolution/+ipm/+field/
-!/time_evolution/+ipm/+evolve/
-!/time_evolution/+ipm_c/+mesh/
-!/time_evolution/+ipm_c/+gauge/
-!/time_evolution/+ipm_c/+output/
-!/time_evolution/+ipm/+mesh/fdMatrix.m
-!/time_evolution/+ipm/+field/initialDensity.m
-!/time_evolution/+ipm/+field/weno5FluxDerivative.m
-!/time_evolution/+ipm/+evolve/globalSplineMaximum.m
-!/time_evolution/+ipm/+evolve/wallGradientIntegral.m
-!/time_evolution/+ipm/+evolve/wallGradientCentroid.m
-!/time_evolution/+ipm_c/config.m
-!/time_evolution/+ipm_c/+mesh/build.m
-!/time_evolution/+ipm_c/+mesh/uniformCoreAxis.m
-!/time_evolution/+ipm_c/+gauge/initialAuthority.m
-!/time_evolution/+ipm_c/+gauge/measure.m
-!/time_evolution/+ipm_c/+gauge/solve.m
-!/time_evolution/+ipm_c/+gauge/wallDerivative.m
-!/time_evolution/+ipm_c/+output/sha256.m
-!/time_evolution/README.md
-
 /test/*
-!/test/+ipm_cr/
-!/test/tests/
-!/test/plots/
-!/test/*.m
-!/test/*.py
-!/test/*.md
-!/test/*.tex
-!/test/SHARED_DEPENDENCIES.json
-/test/tests/inspect_ipm_cr_explicit_initial.m
-/test/tests/compare_ipm_cr_explicit_tau200.m
-/test/plots/plot_ipm_cr_tau10_radial_diagnostic.m
+!/test/README.md
+!/test/ALGORITHM_REPORT.tex
 
-# Generated output, local state and native build products.
-**/runs/
+# Generated output and machine-specific native builds.
 **/results/
+**/runs/
 **/runtime/
 **/checkpoints/
 **/__pycache__/
@@ -80,7 +49,7 @@
 *.zip
 *.tar.gz
 
-# AI/agent scaffolding is not a solver dependency.
+# Agent scaffolding and local credentials are not solver dependencies.
 **/AGENTS.md
 **/agent.m
 **/agents.m
@@ -93,14 +62,6 @@
 *.pem
 *.key
 
-# One immutable numerical input is required by the default polar/mixed solvers.
-# Preserve its historical path to keep source hashes and authority identity intact.
-!/runs/
-/runs/*
-!/runs/local_validation_20261013/
-/runs/local_validation_20261013/*
-!/runs/local_validation_20261013/gaussian26_fresh_warm_01/
-/runs/local_validation_20261013/gaussian26_fresh_warm_01/*
-!/runs/local_validation_20261013/gaussian26_fresh_warm_01/data_frames/
-/runs/local_validation_20261013/gaussian26_fresh_warm_01/data_frames/*
-!/runs/local_validation_20261013/gaussian26_fresh_warm_01/data_frames/frame_step000000000000_tau0000000000000000.mat
+# One immutable input; its content SHA is recorded in data/initial.json.
+!/data/reference/
+!/data/reference/gaussian_t0.mat

@@ -14,7 +14,7 @@
 \newcommand{\R}{\mathbb R}
 \title{张量核心与极坐标外域的高精度 IPM 求解\\
   \large 算法、网格连接与可恢复计算报告}
-\author{\code{test/+ipm_cr}}
+\author{\code{src/+ipm_cr}}
 \date{2026 年 10 月 22 日}
 
 \begin{document}
@@ -79,9 +79,9 @@ $u=M u^{\rm phys}$；相应流函数为 $\psi=ML\psi^{\rm phys}$。于是
  a'=B_0+c_\omega a.
  \label{eq:center}
 \end{equation}
-源码中的 \code{flow.transportOrigin} 即 $B_0$；
-\code{state.rho} 保存的是 $W$，不是 $\rho$、$R$ 或余项 $\eta$。
-开启背景拆分时，真正积分的两块数组另存于 \code{state.residual}。
+源码中的 \code{s.rhs.transportOrigin} 即 $B_0$；
+\code{s.W} 保存的是 $W$，不是 $\rho$、$R$ 或余项 $\eta$。
+开启背景拆分时，真正积分的两块数组另存于 \code{s.eta}。
 
 \begin{center}
 \begin{tabular}{lll}
@@ -90,7 +90,7 @@ $u=M u^{\rm phys}$；相应流函数为 $\psi=ML\psi^{\rm phys}$。于是
 \midrule
 \code{rho.core/polar} & 完整中心化密度 $W$ & 是\\
 \code{residual.core/polar} & 背景外余项 $\eta$ & 是\\
-\code{flow.q}, \code{flow.F}, \code{flow.Q} & $W_X,\ W_\tau,\ (W_\tau)_X$ & 是\\
+\code{s.rhs.q}, \code{s.rhs.F}, \code{s.rhs.Q} & $W_X,\ W_\tau,\ (W_\tau)_X$ & 是\\
 \code{scale} & $\ell,\omega,S,t,t_{\rm low},a,\tau$ & 是\\
 \code{geometry}, 分解与映射 & 固定网格及线性算子 & 否\\
 原初值 authority 与墙参考 & 原 I/P/C 的定义身份 & 否\\
@@ -708,45 +708,54 @@ $h$ & 原耗时/s & 新耗时/s & 耗时比 & 接受步数 & 最大阶段 CFL\\
 \clearpage
 \section{模块契约、重现与代码维护}
 \subsection{维护边界与模块表}
-当前维护代码位于 \code{test/+ipm_cr}；原
-\code{time_evolution/+ipm} 与 \code{+ipm_c} 提供既有模型、
-authority 和规范功能，不在本报告整理中改变。
-实验 \code{runtime} 快照与输入 SHA 是历史证据，不能当作冗余源码删除。
-维护版后续等价缓存重构应使用新快照与回归结果，
-不能继承旧冻结轨道的源码身份。
+当前维护实现位于 \code{src/+ipm_cr}；所需旧公共数值函数已按职责
+收进同一包，不再依赖 \code{time_evolution/+ipm} 或 \code{+ipm_c}。
+独立谱配置与求解器命名为 \code{pconfig/psolver}，
+完整含时数值默认集中于 \code{config}，原初值和规范集中于 \code{problem}。
+\code{data/initial.json} 统一定位原始输入并核对 SHA。
+实验 \code{runtime} 快照与原输入 SHA 仍是历史证据，不能当作冗余源码删除；
+新架构须以自己的快照与回归验收，不能继承旧冻结轨道的源码身份。
 
 \begin{longtable}{p{0.30\linewidth}p{0.62\linewidth}}
 \toprule
 模块 & 输入、输出与责任\\
 \midrule
 \endhead
-\code{explicit/initialize.m} & 原解析初值、原 authority；
-建立 $W,\eta$、完整尺度、墙参考及初始 RHS。\\
-\code{geometry.m}、\code{redistributeRadialAxis.m} &
-固定网格、活动掩码、真实度量、保护前缀和交换计划；不推进时间。\\
-\code{synchronize.m}、\code{differentiate.m} &
-活动 donor 同时 ghost 交换；常数消去后的物理导数。\\
-\code{background.m}、\code{gaussianBackground.m}、\code{dipoleTail.m} &
-当前模型/尺度/查询的解析字段；无跨状态密度缓存。\\
-\code{evaluateResidual.m}、\code{evaluate.m} &
-唯一完整耦合 RHS；组装 $q,F,Q$、规范、CFL 和审计。\\
-\code{transport.m}、原生内核 &
-固定密度的单轴重构、实际速度分裂及速度 Jacobian；不决定步长。\\
-\code{gauge.m}、\code{wallMeasure.m} &
+\code{init/step/rhs/refresh} &
+公开初始化、一个接受步、完整 RHS 求值及同一数学身份下的冷重建；
+状态公开 \code{W/eta/rhs/scale/step}。\\
+\code{context} &
+每个模拟私有拥有固定 Poisson 计划，墙采样映射对外只读；
+\code{mesh/wall/opts/key/id} 只读，统计通过 \code{stats()} 查询。\\
+\code{+mesh} &
+固定网格、真实度量、保护前缀和局部插值；
+\code{fill} 同时交换 ghost，\code{diff} 消去常数后求物理导数。\\
+\code{+model} &
+原初值与 authority、Gaussian、解析主尾和当前尺度背景；
+不跨状态缓存密度。\\
+\code{+evolve} &
+初始化与完整余项 RHS；组装 $q,F,Q$、规范、CFL 和原审计。\\
+\code{+op} &
+固定密度的重构准备、速度应用与原生内核；不决定步长。\\
+\code{+gauge} &
 原 I/P/C 泛函、同一峰权重及二维规范求根。\\
-\code{explicit/poisson.m}、\code{interpolate.m} &
-唯一活动 owner 源映射、解析源叠加、谱速度一致返回。\\
-\code{explicit/sampleState.m} &
-接受态的统一只读查询：解析背景加余项重构、速度、速率和尺度；
-保留原三层试验的采样算术，不推进或对齐状态。\\
-\code{Solver.m}、\code{+core}、\code{+polar} &
-独立谱算子、分解、Schur、严格验收、直接回退。\\
-\code{advance.m}、\code{rk4Tableau.m} &
-数组和标量同步 RK4、全阶段 CFL、峰事件及试步回滚。\\
-\code{tests/run_ipm_cr_explicit.m} &
-唯一演化运行入口、锁、历史、接受态检查点、恢复及状态。\\
-\code{run_explicit_experiment.py} &
-冻结源码/配置/authority，监督同一 MATLAB 入口与资源。\\
+\code{+poisson} &
+固定映射计划、唯一活动 owner 的源映射、解析源叠加与谱速度返回；
+子包 \code{core/polar} 管两域谱算子。\\
+\code{psolver} &
+独立谱分解、重叠 Schur、严格验收、齐次响应复用及直接回退。\\
+\code{+time} &
+数组和标量同步 RK4、全阶段 CFL、真实子步峰事件及试步回滚。\\
+\code{sample}、\code{diag.compare} &
+前者接受物理查询并只读重建完整场；
+后者管理研究区域掩码与比较，不把区域约定放进通用采样。\\
+\code{run}、\code{+io} &
+完整轨道、锁、历史、接受 checkpoint、身份核验和冷恢复；
+固定计划不随 checkpoint 序列化。\\
+\code{tools/} &
+原生构建、冻结源码/配置/初始输入，统一监督 MATLAB 入口与资源。\\
+\code{tests/}、\code{examples/} &
+验证与研究适配、独立椭圆演示和只读绘图；不作为生产求解器包。\\
 \bottomrule
 \end{longtable}
 优化优先复用固定几何、线性分解和单 RHS 不变重构。
@@ -754,19 +763,20 @@ authority 和规范功能，不在本报告整理中改变。
 等价优化需检验字段、规范、CFL、接受/拒绝行为及恢复语义，
 不能以降低验收门限换速度。
 
-本轮维护保留公共 \code{sampleState}，收拢空间研究中重复的场、速率和尺度采样。
+迁移前维护曾统一公共 \code{sampleState}，收拢空间研究中重复的场、速率和尺度采样；
+当前通用接口为 \code{ipm_cr.sample}，区域比较保留于 \code{diag.compare}。
 旧诊断及历史推进入口经 SHA 归档后从维护路径移除；历史数值输出及
 冻结运行时仍保留。独立研发原型保留于原型目录，不进入生产调用链。
 短程逐字段等价回归另行记录，不能把旧冻结 $\tau=10$ 结果改标为
 整理后源码的新轨道试验。
 
-本轮还试验了差分稀疏行/列计划的几何缓存，但没有采用该候选。
+迁移前还试验了差分稀疏行/列计划的几何缓存，但没有采用该候选。
 候选通过逐字段等价回归，中层局部差分基准的中位耗时却为
 $4.20885$\,ms，高于原实现的 $3.96452$\,ms，约慢 $6\%$。
 因此差分与几何维护代码恢复原实现，候选源码和测试结果单独留证。
 该局部基准既不等于完整 RHS 的成本，也不支持任何完整 RHS 加速结论。
 
-\paragraph{整理后的独立回归。}
+\paragraph{迁移前代码清理的独立回归。}
 最终维护验证见
 \path{test/results/cleanup_20261022/regression_final/refactor.json}。
 在原网格与启用径向重分配的两种配置上，分别从同一原始初值
@@ -776,15 +786,32 @@ $4.20885$\,ms，高于原实现的 $3.96452$\,ms，约慢 $6\%$。
 另运行三层静态重分配回归，以及 $\tau=0.003$ 的三层研究入口集成检查，
 验证统一采样调用及来源清单不变。后两项分别验证结构/算子与入口连通性，
 不将极短轨道当作新的空间精度阶数证据。
-现有核心数值文件保持清理前字节内容，新增只读采样接口；
+当轮核心数值文件保持清理前字节内容，新增只读采样接口；
 历史 $\tau=10$ 原始数据、检查点和冻结运行均未修改。
+
+\paragraph{当前架构迁移的验收。}
+仅用主线文件导出的干净目录，从头构建原生内核后，
+原网格与径向重分配各 $2$ 步的 $\tau=0.03$ 回归再次逐字节一致；
+公开状态、独立上下文、修改数学设置后的旧 RHS 拒绝、通用查询均通过。
+$\tau=0.003\to0.006$ 的冷恢复与目录迁移相对差异为零，
+损坏 SHA、过期写入游标和 STOP 的接受指针保护通过。
+组件套件及完整 RK4 短窗时间加密另有新源身份的记录；
+它们不将历史空间研究重新认证为新轨道。
+充分暖机后的同机单线程成本对比，使用 $h=0.03$、基准径向节点 $385$、
+角节点 $129$，谱阶 $64/80/20$ 及严格验收、径向重分配参数 $2/4/20$。
+完整 RHS 中位耗时为旧 $55.844$\,ms、新 $55.965$\,ms；
+从原初值到 $\tau=0.1$ 的 $8$ 个接受步耗时为旧 $1.907$\,s、新 $1.926$\,s，
+端点完整数值场一致，最大阶段 CFL 为 $0.286227$。
+该成本排除进程启动、初次构建、暖机及检查点 I/O；
+约 $1\%$ 的短程差异仅表明未见明显性能回退，不能外推 $200\tau$ 耗时。
+验收与原始记录索引见 \path{docs/VALIDATION.md}。
 
 \subsection{可执行入口}
 在项目根目录的 MATLAB 中，组件验证先写入新的绝对输出目录：
 \begin{Verbatim}[fontsize=\small]
-addpath('test','test/tests','time_evolution');
+addpath('src','tools','tests');
 build_ipm_cr_native();
-out = fullfile(pwd,'test/results/my_static_check');
+out = fullfile(pwd,'output/my_static_check');
 test_ipm_cr_radial_redistribution(out);
 \end{Verbatim}
 当前修复方案的单条原初值轨道示例为：
@@ -795,12 +822,20 @@ g = struct('coreSpacing',.03, ...
         'preserveRadius',4,'fullRefinementRadius',20));
 p = struct('coreDegree',[64,64],'angularDegree',80, ...
     'polarDegree',20,'rOuter',1e10,'requireAccuracy',true);
-o = struct('outputDir',fullfile(pwd,'test/results/my_tau10'), ...
+o = struct('outputDir',fullfile(pwd,'output/my_tau10'), ...
     'tauEnd',10,'wallSeconds',600,'geometry',g, ...
     'solverOptions',p,'cfl',.3,'timeIntegrator','rk4');
-summary = run_ipm_cr_explicit(o);
+[summary,s,ctx] = ipm_cr.run(o);
 \end{Verbatim}
 同一源码与数值配置下再次运行同一命令可从接受态继续。
+单步交互使用 \code{[s,ctx]=ipm_cr.init(opts)} 和
+\code{[s,info]=ipm_cr.step(s,ctx,tauEnd)}；后者只返回一个接受步，
+\code{tauEnd} 是上限，不是完整时间循环。
+通用物理查询为 \code{ipm_cr.sample(s,ctx,x,y)}，无需研究区域掩码。
+\code{ipm_cr.rhs(s,ctx)} 返回完整求值，
+\code{ipm_cr.refresh(s,ctx)} 只在相同数学身份下冷重建 RHS。
+可迁移冻结副本使用相对路径的源身份；
+checkpoint 指针只记录槽文件名，私有计划恢复时重建。
 源码、背景、网格或 authority 改变须用新目录，不能恢复到旧轨道。
 三层联合试验入口为 \code{test_ipm_cr_ivp_spatial}；
 其选项、比较云和资源预算应随新实验冻结，不能覆盖下列已完成报告。
@@ -809,8 +844,8 @@ summary = run_ipm_cr_explicit(o);
 路径均相对项目根目录；下列记录及其 SHA 清单构成本报告的数据来源。
 \begin{itemize}
  \item 算法与连接契约：
-       \code{test/ARCHITECTURE.md}，
-       \code{test/CONNECTION_METHOD.md}。
+       \code{docs/ARCHITECTURE.md}，
+       \code{docs/CONNECTION_METHOD.md}。
  \item 三层修复汇总：
        \path{test/results/radial_redistribution_tau10_20261022/fix_result.json}。
  \item 原始三层新轨道：

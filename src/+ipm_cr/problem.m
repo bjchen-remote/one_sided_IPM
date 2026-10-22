@@ -1,0 +1,13 @@
+function cfg=problem()
+%PROBLEM Physical datum and fixed I/P/C reference declared in one manifest.
+folder=ipm_cr.root();manifest=jsondecode(fileread(fullfile(folder,'data','initial.json')));
+assert(strcmp(manifest.format,'ipm_cr_initial_v1'),'ipm_cr:ProblemFormat','Unknown initial datum format.');
+parts=strsplit(char(manifest.file),'/');
+assert(~any(ismember(parts,{'','..','.'}))&&~startsWith(manifest.file,filesep), ...
+    'ipm_cr:ProblemPath','Use a project-relative initial datum path.');
+cfg=struct('physics',manifest.physics,'grid',manifest.grid,'transport',manifest.transport, ...
+    'scaling',manifest.scaling,'authorityFile',fullfile(folder,parts{:}), ...
+    'authoritySha',char(manifest.sha256));
+assert(isfile(cfg.authorityFile)&&strcmp(ipm_cr.io.sha(cfg.authorityFile),cfg.authoritySha), ...
+    'ipm_cr:ProblemIdentity','The original initial datum is missing or changed.');
+end

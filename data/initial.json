@@ -1,0 +1,40 @@
+{
+  "format": "ipm_cr_initial_v1",
+  "file": "data/reference/gaussian_t0.mat",
+  "sha256": "fa80e7d2b4fedb6b28186dcaee844975569fac41da06d26b35a2519d7521db22",
+  "physics": {
+    "initialCondition": "localized_gaussian_primitive",
+    "symmetryMode": "half_plane",
+    "gaussianAmplitude": 0.7,
+    "gaussianCenterX": 0,
+    "gaussianWidthX": 0.75,
+    "gaussianWidthY": 1,
+    "gaussianSkewWeight": 0.2
+  },
+  "grid": {
+    "nr": 321,
+    "ntheta": 257,
+    "rmax": 10000000000.0,
+    "firstSpacing": 0.03,
+    "radialMap": "uniform_core",
+    "coreRadius": 2,
+    "coreTailFraction": 0.01,
+    "originFitDegree": 6,
+    "stencilWidth": 7
+  },
+  "transport": {
+    "spatialDiscretization": "high_order",
+    "wenoEpsilon": 1e-12,
+    "wenoAlphaMode": "local",
+    "wenoInflowDensityDegree": 1
+  },
+  "scaling": {
+    "scalingContract": "wall_integral_centroid_practical_v1",
+    "gaugeTransportAssembly": "net_velocity_density_centered_advective",
+    "cOmegaGauge": "wall_omega_global_spline_maximum",
+    "cOmegaGaugeFloor": 1e-20,
+    "pointStrainConditionFloor": 1e-06,
+    "wallIntegralRadius": 1,
+    "peakPositionRestoringRate": 0.5
+  }
+}
