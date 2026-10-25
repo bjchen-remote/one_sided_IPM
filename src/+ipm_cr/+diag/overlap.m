@@ -12,7 +12,7 @@ function info=overlap(state,g,options)
 % fractional offsets, independently of either patch's collocation nodes.
 
 if nargin<3,options=struct();end
-assert(isstruct(state)&&isscalar(state)&&all(isfield(state,{'rho','flow'}))&& ...
+assert(isstruct(state)&&isscalar(state)&&all(isfield(state,{'W','rhs'}))&& ...
     isstruct(g)&&isscalar(g)&&all(isfield(g,{'core','polar'})), ...
     'ipm_cr:ExplicitAuditState','Supply one complete accepted explicit state and its geometry.');
 opts=resolve_options(options);
@@ -38,14 +38,14 @@ if isempty(hit)
 else
     cache=retained{hit};cacheReused=true;
 end
-flow=state.flow;
+flow=state.rhs;
 assert(all(isfield(flow,{'q','F','Q','physical'}))&& ...
     all(isfield(flow.physical,{'core','polar'}))&& ...
     all(isfield(flow.physical.core,{'u1','u2'}))&& ...
     all(isfield(flow.physical.polar,{'u1','u2'})), ...
     'ipm_cr:ExplicitAuditFields','The accepted flow must contain q, F, Q and both physical velocities.');
 fields=struct();
-[fields.rho,~]=compare(state.rho);
+[fields.rho,~]=compare(state.W);
 [fields.q,~]=compare(flow.q);
 [fields.F,~]=compare(flow.F);
 [fields.Q,~]=compare(flow.Q);

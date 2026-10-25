@@ -4,8 +4,8 @@ function [s,records]=trial(initial,h,method,g,options,callbacks)
 initialZ=[initial.scale.logC_l;initial.scale.logC_omega; ...
     initial.scale.physicalTime;initial.scale.X_shift; ...
     initial.scale.canonicalTime;initial.scale.densityOrigin];
-hasResidual=isfield(initial,'residual');initialGrid=initial.rho;
-if hasResidual,initialGrid=initial.residual;end
+hasResidual=isfield(initial,'eta');initialGrid=initial.W;
+if hasResidual,initialGrid=initial.eta;end
 stage=callbacks.stage;note_peak=callbacks.notePeak;finish=callbacks.finish;
 tableau=[];
 if strcmp(method,'rk4')
@@ -14,7 +14,7 @@ else
     [s,records]=attempt_ssprk3(initial,h);
 end
     function [s,records]=attempt_rk4(old,h)
-        s=[];z=initialZ;f0=old.flow;k0=scalar_rate(z,f0);
+        s=[];z=initialZ;f0=old.rhs;k0=scalar_rate(z,f0);
         note_peak(f0,z(5),0,true,true);
         records=record_start(f0,k0(3));r0=grid_rhs(f0);
         q1=add(initialGrid,1,r0,h*tableau.A(2,1));z1=z+h*tableau.A(2,1)*k0;
@@ -46,7 +46,7 @@ end
     end
     function [s,records]=attempt_ssprk3(old,h)
         % Preserve the historical SSPRK3 density/scalar arithmetic.
-        s=[];z=initialZ;f0=old.flow;k0=scalar_rate(z,f0);
+        s=[];z=initialZ;f0=old.rhs;k0=scalar_rate(z,f0);
         note_peak(f0,z(5),0,true,true);
         records=record_start(f0,k0(3));
         q1=add(initialGrid,1,grid_rhs(f0),h);z1=z+h*k0;

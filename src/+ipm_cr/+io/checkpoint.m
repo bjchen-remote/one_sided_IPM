@@ -5,10 +5,22 @@ function varargout=checkpoint(action,folder,varargin)
 % The writer must hold the run's owner lock. Stale pointer chains are rejected.
 % checkpoint('legacy',folder) returns an untouched historical v1 payload;
 % it does not migrate it, rebind a context, or authorize v2 continuation.
+% checkpoint('import',folder) reads the same v1 data with W/eta/rhs state
+% names for diagnostics only; it never writes or authorizes continuation.
 switch action
     case 'load',[varargout{1:nargout}]=read_v2(folder);
     case 'save',[varargout{1:nargout}]=write_v2(folder,varargin{:});
     case 'legacy',[varargout{1:nargout}]=read_legacy(folder);
+    case 'import'
+        [cp,pointer]=read_legacy(folder);
+        s=cp.state;old={'rho','residual','flow'};names={'W','eta','rhs'};
+        for k=1:numel(old)
+            if isfield(s,old{k})
+                assert(~isfield(s,names{k}),'ipm_cr:StateAlias','Duplicate state representations.');
+                s.(names{k})=s.(old{k});s=rmfield(s,old{k});
+            end
+        end
+        cp.state=s;varargout={cp,pointer};
     otherwise,error('ipm_cr:CheckpointAction','Unknown checkpoint action %s.',action);
 end
 end
@@ -32,7 +44,7 @@ cp.kind='ipm_cr_accepted_checkpoint_v2';cp.schemaVersion=2;
 cp.stateRepresentation='W_centered_density_eta_analytic_residual';
 cp.acceptedOnly=true;cp.solverFactorCacheSaved=false;cp.sequence=cp.state.step;
 cp.contextKey=cp.state.ctxKey;
-cp.spatialAudit=ipm_cr.diag.overlap(ipm_cr.internal.state(cp.state,'old'),cp.geometry);
+cp.spatialAudit=ipm_cr.diag.overlap(cp.state,cp.geometry);
 entry=struct('step',cp.state.step,'tau',cp.state.scale.canonicalTime,'audit',cp.spatialAudit);
 if isempty(cp.auditHistory),cp.auditHistory=entry;else,cp.auditHistory(end+1)=entry;end
 slot=0;generation=0;

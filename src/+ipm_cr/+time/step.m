@@ -5,9 +5,9 @@ function [out,info]=step(state,g,wallOps,options,finalTau,ctx)
 % The identical accepted initial RHS is reused, then the fresh endpoint is
 % retained for the next step. All stages AND the endpoint obey the CFL.
 % The stated order is temporal only; no spatial-order certificate follows.
-% With state.residual, integrate that exact background-subtracted variable
-% using flow.residualRhs. evolve.residual reconstructs full centered W at
-% each scalar stage; state.rho and flow.F retain their full-W meanings.
+% With state.eta, integrate that exact background-subtracted variable
+% using rhs.residualRhs. rhs reconstructs full centered W at each scalar
+% stage; state.W and rhs.F retain their full-W meanings.
 % State/RHS context identity is checked before the cached initial RHS is used.
 % RK4 steps are split at observed original-spline peak-cell crossings.
 % Event probes use the same complete explicit tableau from the accepted
@@ -31,15 +31,15 @@ for name={'cfl','maxDt','minDt'}
     validateattributes(options.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
 end
 validateattributes(finalTau,{'numeric'},{'scalar','real','finite'});
-validate_rate(state.flow.rate);
+validate_rate(state.rhs.rate);
 initial=state;initialZ=pack(state.scale);
-hasResidual=isfield(state,'residual');
+hasResidual=isfield(state,'eta');
 assert(all(isfinite(initialZ))&&isfinite(state.scale.physicalTimeLow), ...
     'ipm_cr:ExplicitScale','The accepted initial scale and clock must be finite.');
 remaining=finalTau-state.scale.canonicalTime;
 assert(remaining>0,'ipm_cr:ExplicitFinalTime','The endpoint must follow the accepted state.');
 % The predictor margin never replaces the binding complete-stage audit.
-dt=min([options.maxDt,.95*options.cfl/max(state.flow.rate,realmin),remaining]);
+dt=min([options.maxDt,.95*options.cfl/max(state.rhs.rate,realmin),remaining]);
 retries=0;rhsEvaluations=0;retryReasons={};
 retryDiagnostics=struct([]);retryCauses={};maximumRetries=12;
 peakDiagnostics=struct([]);
@@ -92,11 +92,11 @@ if strcmp(method,'rk4'),order=4;stages=4;label='rk4_full_hybrid_cfl_peak_events_
 else,order=3;stages=3;label='ssprk3_full_hybrid_cfl_v1';end
 info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
     'spatialOrderCertified',false,'dt',dt,'seconds',toc(timer), ...
-    'rate',initial.flow.rate,'maximumStageRate',maximumRate, ...
+    'rate',initial.rhs.rate,'maximumStageRate',maximumRate, ...
     'realizedMaximumStageCfl',dt*maximumRate,'configuredCfl',options.cfl, ...
     'retries',retries,'retryReasons',{retryReasons},'retryDiagnostics',retryDiagnostics, ...
     'maximumStepRetries',maximumRetries,'explicitCflLimitApplied',true, ...
-    'cflPosition',out.flow.cflPosition, ...
+    'cflPosition',out.rhs.cflPosition, ...
     'maximumStageCflPosition',records.positions{maximumStageIndex}, ...
     'maximumCflStageIndex',maximumStageIndex,'stageCount',stages, ...
     'stageRates',records.rates,'stageCfl',dt*records.rates, ...
@@ -124,14 +124,9 @@ info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
         rhsEvaluations=rhsEvaluations+1;
         peakIndex=note_peak([],currentStageTau, ...
             (currentStageTau-initial.scale.canonicalTime)/dt,false,false);
-        if hasResidual
-            stageScale=unpack(z,initial.scale);
-            [f,rhoActual]=ipm_cr.evolve.residual( ...
-                field,stageScale,g,wallOps,options,[previous.c_l,previous.c_r],wantDiagnostics,ctx);
-        else
-            [f,rhoActual]=ipm_cr.evolve.rhs( ...
-                field,g,wallOps,options,[previous.c_l,previous.c_r],[],wantDiagnostics,ctx);
-        end
+        staged=initial;staged.scale=unpack(z,initial.scale);staged.rhs=previous;
+        if hasResidual,staged.eta=field;else,staged.W=field;end
+        [f,rhoActual]=ipm_cr.rhs(staged,ctx,wantDiagnostics);
         snapshot=ipm_cr.time.peak(f);names=fieldnames(snapshot);
         for k=1:numel(names),peakDiagnostics(peakIndex).(names{k})=snapshot.(names{k});end
         peakDiagnostics(peakIndex).rhsReturned=true;
@@ -140,8 +135,8 @@ info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
     function s=finish(old,q,rhoActual,z,f,h,increment)
         assert(all(isfinite(z))&&isfinite(increment)&&increment>0, ...
             'ipm_cr:ExplicitScale','The scalar state and weighted clock increment must be finite.');
-        s=old;s.rho=rhoActual;s.flow=f;s.scale=unpack(z,old.scale);
-        if hasResidual,s.residual=q;end
+        s=old;s.W=rhoActual;s.rhs=f;s.scale=unpack(z,old.scale);
+        if hasResidual,s.eta=q;end
         s.scale.canonicalTime=old.scale.canonicalTime+h;
         [s.scale.physicalTime,s.scale.physicalTimeLow]=clock_add( ...
             old.scale.physicalTime,old.scale.physicalTimeLow,increment);

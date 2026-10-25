@@ -80,26 +80,26 @@ try
     report.kinematic=kinematic_test(model);report.kinematicPassed=report.kinematic.passed;
     report.elapsedSeconds=toc(timer);persist(outputDir,report);
     if includeInitial
-        [state,g,~,method]=ipm_cr.evolve.init(initialOptions);
-        assert(isfield(state,'residual'),'ipm_cr:BackgroundTestInitial','The default new path must store eta separately.');
-        etaMax=max([abs(state.residual.core(:));abs(state.residual.polar(:))]);
+        [state,ctx]=ipm_cr.init(initialOptions);g=ctx.mesh;method=ctx.opts;
+        assert(isfield(state,'eta'),'ipm_cr:BackgroundTestInitial','The default new path must store eta separately.');
+        etaMax=max([abs(state.eta.core(:));abs(state.eta.polar(:))]);
         qError=struct();bareError=struct();WError=struct();
-        raw=ipm_cr.mesh.diff(state.rho,g);
+        raw=ipm_cr.mesh.diff(state.W,g);
         for patch={'core','polar'}
             key=patch{1};grid=g.(key);
             exact=reference_fields(method.background,state.scale,grid.X,grid.Y);
             bg=ipm_cr.model.background(method.background,state.scale,grid.X,grid.Y);
-            qError.(key)=native_metric(state.flow.q.(key)-exact.x,grid);
+            qError.(key)=native_metric(state.rhs.q.(key)-exact.x,grid);
             bareError.(key)=native_metric(raw.(key).x-exact.x,grid);
-            WError.(key)=native_metric(state.rho.(key)-bg.H,grid);
+            WError.(key)=native_metric(state.W.(key)-bg.H,grid);
         end
         qMax=max(qError.core.globalInfinity,qError.polar.globalInfinity);
         report.initial=struct('tau',state.scale.canonicalTime,'etaInfinity',etaMax, ...
-            'etaExactlyZero',etaMax==0,'originWExactlyZero',state.rho.core(1,g.core.originIndex)==0, ...
-            'analyticSourceEnabled',state.flow.analyticBackgroundSource, ...
+            'etaExactlyZero',etaMax==0,'originWExactlyZero',state.W.core(1,g.core.originIndex)==0, ...
+            'analyticSourceEnabled',state.rhs.analyticBackgroundSource, ...
             'qError',qError,'bareFullWDifferentiationDiagnostic',bareError, ...
-            'WReconstructionError',WError,'poisson',state.flow.poisson, ...
-            'passed',etaMax==0&&qMax<=1e-12&&state.flow.analyticBackgroundSource);
+            'WReconstructionError',WError,'poisson',state.rhs.poisson, ...
+            'passed',etaMax==0&&qMax<=1e-12&&state.rhs.analyticBackgroundSource);
         report.initialPassed=report.initial.passed;
     end
     report.sourceHashesUnchanged=isequaln(report.sourceInventory,source_inventory(root));

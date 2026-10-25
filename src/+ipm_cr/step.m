@@ -10,6 +10,5 @@ if nargin>3
 end
 assert(isfield(s,'ctxId')&&strcmp(s.ctxId,ctx.id),'ipm_cr:StaleState', ...
     'State belongs to another context. Use refresh only for an identical mathematical setup.');
-[s,info]=ipm_cr.time.step(ipm_cr.internal.state(s,'old'),ctx.mesh,ctx.wall,opts,tauEnd,ctx);
-s=ipm_cr.internal.state(s,'new');
+[s,info]=ipm_cr.time.step(s,ctx.mesh,ctx.wall,opts,tauEnd,ctx);
 end

@@ -1,5 +1,21 @@
 # 活动代码清理与迁移记录
 
+## 2026-10-24：移除旧参考载体和未使用的网格工作
+
+`model.reference` 从 231 行收拢至 86 行，改为 `[wall,scale,refs,guess]=reference(cfg)`。直接从原始 frame 读墙节点，仅返回维护初始化真正使用的四项；原输入 SHA、t0 时钟、Gaussian 整场、原墙差分源及 I/P/C 验收保留。删除 `cart/polar/shared` 旧输出与重复调用接口、未用证据包装和散列，并取消初始化时为参考专门构造的整张极坐标网格和第二次 frame 读取。
+
+`mesh.polar` 移除无人读取的原点拟合/QR、重复一阶及二阶矩阵、`R/Theta`、旧 joined-wall 派生量；实际轴、坐标、径向度量及输运算子不变。删除零调用的 `op.transport.m` 兼容分发，维护路径继续使用 `op.prepare/apply`。本轮源码由 66 个文件、5709 行减为 65 个文件、5496 行；验证见 [VALIDATION.md](VALIDATION.md)。
+
+## 2026-10-23：收拢初始化、RHS 与状态表示
+
+公开 `init` 吸收原 `+evolve/init`，公开 `rhs` 吸收原 `+evolve/residual` 与 `+evolve/rhs`；`refresh`、RK 阶段直接调用同一个 RHS，重建密度由其第二输出返回。移除整个 `+evolve` 包，不再维护两套初始化签名和背景分发。
+
+生产、诊断与输出统一使用 `W/eta/rhs`，删除 `+internal/state.m` 及每步、采样和 history 的往返字段转换。v1 原始读取契约保持不变，仅新增 `checkpoint('import',folder)` 提供只读规范命名视图；v2 检查点与历史列格式不变。`+internal/auditSource.m` 的单调用方辅助函数移入 `psolver.m` 本地，保留原严格验收。
+
+本轮共删除 5 个源文件。`+time` 中 RK tableau、试步、峰事件与回滚仍各有清晰职责；不以删除阶段 CFL 或数值审计缩短实现。原冻结基线和历史结果保留原身份，验收范围见 [VALIDATION.md](VALIDATION.md)。
+
+`model.initial` 同时移除旧 front、blob、degenerate、CCF 和回调初值分支及其 cutoff 辅助函数。公开配置没有物理初值覆盖入口，原始 authority 已明确要求 Gaussian；活动调用链和组件调用也只使用这一初值。保留 Gaussian 原计算式与顺序，加显式条件断言，其余历史算例仍在 `legacy/solvers`。完整求解器及初值函数的修改前版本均保存在本地回归快照。
+
 ## 2026-10-22：按职责迁入 `src/+ipm_cr`
 
 维护实现从 `test/+ipm_cr` 迁入 `src/+ipm_cr`，生产路径不再依赖 `time_evolution/+ipm/+ipm_c`。所需公共数值函数按职责收进 `mesh/model/gauge/op/io`，保持物理初值、原 I/P/C、径向映射、RK 算术与全部阶段 CFL 的数值语义。目录变化需要新的源码身份，不能继承旧冻结轨道的 SHA 或资格标记。
@@ -12,7 +28,8 @@
 src/+ipm_cr/                  唯一维护源码与公开 API
   +mesh/ +model/ +gauge/      网格、物理模型、原规范
   +poisson/                  独立谱系统及源/速度映射计划
-  +evolve/ +time/ +op/        完整 RHS、显式推进、重构内核
+  init.m / rhs.m             初始化、完整残差 RHS
+  +time/ +op/                显式推进、重构内核
   +io/ +diag/ +internal/     运行事务、诊断、内部数值工具
 data/initial.json            初始输入定位、SHA 与原物理设置
 data/reference/              原始 tau0 输入

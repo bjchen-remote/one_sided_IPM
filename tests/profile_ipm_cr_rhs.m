@@ -5,8 +5,7 @@ assert(~isfolder(outputDir),'ipm_cr:ProfilePreserve','Use a fresh output directo
 mkdir(outputDir);
 root=fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(root,'src'));
-[state,g,wallOps,options,ctx]=ipm_cr.evolve.init();
-guess=[state.flow.c_l,state.flow.c_r];
+[state,ctx]=ipm_cr.init();
 run_rhs();
 profile clear;profile on;
 timer=tic;
@@ -31,10 +30,6 @@ fid=fopen(fullfile(outputDir,'profile.json'),'w');cleanup=onCleanup(@()fclose(fi
 fwrite(fid,jsonencode(report,'PrettyPrint',true),'char');
 disp(struct2table(rows(1:min(15,numel(rows)))));
     function flow=run_rhs()
-        if isfield(state,'residual')
-            flow=ipm_cr.evolve.residual(state.residual,state.scale,g,wallOps,options,guess,true,ctx);
-        else
-            flow=ipm_cr.evolve.rhs(state.rho,g,wallOps,options,guess,[],true,ctx);
-        end
+        flow=ipm_cr.rhs(state,ctx,true);
     end
 end

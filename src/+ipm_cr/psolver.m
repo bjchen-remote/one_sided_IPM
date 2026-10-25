@@ -211,19 +211,19 @@ classdef psolver < handle
             valueScale=max(1,amplitude);vScale=max(1,velocityScale);qScale=max(1,scale);
             strong=NaN;
             if ~isempty(callback)
-                source=ipm_cr.internal.auditSource(callback,x,y);
+                source=audit_source(callback,x,y);
                 strong=max([abs(-a.laplacian-source);abs(-b.laplacian-source)])/qScale;
                 z=((0:24)+.29)/25;
                 [xx,yy]=meshgrid(g.coreHalfWidth*(2*z-1),g.coreHeight*z);
                 v=ipm_cr.poisson.core.evaluate(c,s.core,xx(:),yy(:));
-                f=ipm_cr.internal.auditSource(callback,xx(:),yy(:));
+                f=audit_source(callback,xx(:),yy(:));
                 strong=max(strong,max(abs(-v.laplacian-f),[],'all')/qScale);
                 % Audit every log-r panel, including source-bearing exterior.
                 mid=(p.logEdges(1:end-1)+p.logEdges(2:end))/2;
                 half=diff(p.logEdges)/2;
                 ts=reshape(mid+[-sqrt(3/5);0;sqrt(3/5)]*half,1,[]);
                 [tt,aa]=ndgrid(ts,theta);xx=exp(tt).*cos(aa);yy=exp(tt).*sin(aa);
-                v=ipm_cr.poisson.polar.evaluate(p,s.polar,xx,yy);f=ipm_cr.internal.auditSource(callback,xx,yy);
+                v=ipm_cr.poisson.polar.evaluate(p,s.polar,xx,yy);f=audit_source(callback,xx,yy);
                 strong=max(strong,max(abs(-v.laplacian-f),[],'all')/qScale);
             end
             accepted=isfinite(backward)&&backward<=g.linearTolerance&& ...
@@ -245,4 +245,12 @@ classdef psolver < handle
                 'coreEigenvectorCondition',c.eigenvectorCondition);
         end
     end
+end
+
+function f=audit_source(callback,x,y)
+% A missing audit and an invalid audit are distinct conditions.
+f=callback(x,y);
+if isscalar(f),f=repmat(f,size(x));end
+assert(isnumeric(f)&&isreal(f)&&isequal(size(f),size(x))&&all(isfinite(f),'all'), ...
+    'ipm_cr:SourceAudit','The off-grid source must be finite, real and match the query shape.');
 end

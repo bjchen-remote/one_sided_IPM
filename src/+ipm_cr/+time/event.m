@@ -4,14 +4,14 @@ function [s,r,h,event]=event(initial,s,r,h,wallKnots,options,trialProbe,event)
     % at INITIAL and are accepted by the ordinary outer-step gate.
     event.initialProposedDt=h;event.acceptedDt=h;
     probes=0;guardCuts=0;
-    start=ipm_cr.time.peak(initial.flow);
+    start=ipm_cr.time.peak(initial.rhs);
     if isempty(wallKnots)||~start.available||~isfinite(start.x),return;end
     while true
         crossing=find_crossing(r,h,start.x);
         if ~crossing.found,break;end
         event.knotX=crossing.knot;event.direction=crossing.direction;
         xtol=64*eps(max(1,abs(crossing.knot)));
-        endpoint=ipm_cr.time.peak(s.flow);
+        endpoint=ipm_cr.time.peak(s.rhs);
         fStart=crossing.direction*(start.x-crossing.knot);
         fEnd=crossing.direction*(endpoint.x-crossing.knot);
         if abs(fEnd)<=xtol
@@ -31,7 +31,7 @@ function [s,r,h,event]=event(initial,s,r,h,wallKnots,options,trialProbe,event)
                 error('ipm_cr:PeakEventUnresolved','Peak-cell stage guards did not resolve a crossing.');
             end
             [s,r]=probe(h);event.status='stage_crossing_guard';
-            event.rootResidual=s.flow.measurement.peak.x-crossing.knot;
+            event.rootResidual=s.rhs.measurement.peak.x-crossing.knot;
             continue;
         end
         % The endpoint brackets the first observed knot in this
@@ -60,7 +60,7 @@ function [s,r,h,event]=event(initial,s,r,h,wallKnots,options,trialProbe,event)
                     'A located peak-cell event requires dt below minDt.');
             end
             [candidateState,candidateRecords]=probe(probeH);
-            snapshot=ipm_cr.time.peak(candidateState.flow);
+            snapshot=ipm_cr.time.peak(candidateState.rhs);
             value=crossing.direction*(snapshot.x-crossing.knot);
             if ~isfinite(value)
                 error('ipm_cr:PeakEventUnresolved','The endpoint peak is nonfinite during event localization.');

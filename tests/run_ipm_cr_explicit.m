@@ -3,7 +3,6 @@ function [summary,state,g,wallOps]=run_ipm_cr_explicit(options)
 % New applications use [summary,state,ctx]=ipm_cr.run(options).
 if nargin<1,options=struct();end
 root=fileparts(fileparts(mfilename('fullpath')));addpath(fullfile(root,'src'));
-[summary,public,ctx]=ipm_cr.run(options);state=[];g=[];wallOps=[];
-if ~isempty(public),state=ipm_cr.internal.state(public,'old');end
+[summary,state,ctx]=ipm_cr.run(options);g=[];wallOps=[];
 if ~isempty(ctx),g=ctx.mesh;wallOps=ctx.wall;end
 end

@@ -15,7 +15,6 @@ src/+ipm_cr/
   +model                           初值、authority、解析背景及尾项
   +gauge                           原 I/P/C、峰值与规范求根
   +poisson                         源/速度映射计划及 core/polar 谱算子
-  +evolve                          初始化及完整残差 RHS
   +time                            RK4 试步、阶段 CFL、峰事件与回滚
   +op                              固定场重构、速度应用及原生内核
   +io                              checkpoint、history、身份、JSON、SHA
@@ -34,9 +33,15 @@ v = ipm_cr.sample(s,ctx,x,y);
 [summary,s,ctx] = ipm_cr.run(runOptions);
 ```
 
-`step` 只返回一个接受步，`tauEnd` 是该步上限；完整时间循环由 `run` 管理。`rhs` 返回当前状态的完整求值，`refresh` 在同一数学身份下重建接受态 RHS；两者都不跨版本转换轨道。`sample` 接受匹配的物理查询数组，不要求区域掩码。区域比较、采样范数和研究云在 `diag.compare`，不侵入通用采样。
+`init` 直接构造状态，`rhs` 直接组装本阶段背景与完整 RHS；没有第二套初始化或 RHS 分发入口。`step` 只返回一个接受步，`tauEnd` 是该步上限；完整时间循环由 `run` 管理。`rhs` 返回当前状态的完整求值，可用第二输出 `[eval,W]` 取得同步、重建后的完整中心化密度。`refresh` 在同一数学身份下调用它重建接受态 RHS；两者都不跨版本转换轨道。`sample` 接受匹配的物理查询数组，不要求区域掩码。区域比较、采样范数和研究云在 `diag.compare`，不侵入通用采样。
+
+初始化、RK 阶段、诊断、history 和 v2 checkpoint 全程使用同一套 `W/eta/rhs` 字段；不再往返转换 `rho/residual/flow`。旧 v1 数据的命名转换仅在 `io.checkpoint('import',folder)` 这一只读边界发生；`'legacy'` 仍返回未经修改的历史 payload。导入不改写历史文件，也不授权新源码继续旧轨道。
 
 `config` 是完整数值选项的唯一默认来源，保持 `geometry/solverOptions/transport/cfl/maxDt/minDt/timeIntegrator/background` 字段。`pconfig` 只定义谱椭圆选项，不与含时 `config` 混用；`problem` 集中物理初值、原始规范和 authority。`data/initial.json` 是唯一初始文件定位与 SHA 清单，实际文件为 `data/reference/gaussian_t0.mat`。
+
+`model.initial` 仅实现原 Gaussian 初值，运算顺序与原 authority 一致；旧求解器的其他算例不混入维护实现。背景选项控制同一物理初值的解析分解，不改变原初值及 I/P/C 参考。
+
+`model.reference(cfg)` 直接读取已核 SHA 的原始 t0 frame，返回原墙算子、初始尺度、I/P/C 参考和规范初猜。原墙节点来自该 frame，原 `Dx`、密度/墙源一致性和 t0 时钟均重新核验；建立参考不构造输运网格，也不建立旧 Cartesian/polar 状态载体。
 
 `context` 是每次模拟独立的 handle，公开 `mesh/wall/opts/key/id` 只读；固定 Poisson 计划和 `psolver` 句柄由它私有持有；墙采样 `wallR/wallMap` 对外只读，统计经 `ctx.stats()` 读取。不把每个局部函数改成类，不持有跨状态密度/源/规范观测；数组仍以 struct 和数值矩阵传递。模型、时间步与诊断只能使用匹配身份的状态和上下文。
 
@@ -65,6 +70,8 @@ f(q)=f_*+\sum_j w_j(f_j-f_*),
 以局部 donor `f_*` 为锚，常数场的差值严格为零；原几何的只读矩阵兼容路径保留，当前公开恢复仍要求相同数学身份。`diag.overlap` 在独立非节点查询上分别重构两块活动值，记录 `rho/q/F/Q/u` 差异；ghost 相等不是独立活动区一致性的证明。
 
 ### 固定远区径向重分配
+
+`mesh.polar` 仅构造基础轴、坐标和径向度量。旧原点拟合、二阶差分、重复一阶矩阵及整张 `R/Theta` 已无活动消费者；实际输运的 `Dr/Dt` 在 `mesh.build` 截取环带后构造。基础轴和度量的算术保持原样。
 
 `opts.geometry.radialRedistribution.enabled` 默认 `false`，关闭时不改变原轴与 `geometryKey`。开启时，`mesh.radial` 在 `uniform_core` 原连续径向轴的旧索引上积分 BetaCDF(8,8) 监测函数，再反解新整数索引。默认保护 `r≤4`，在 `4<r<20` 平滑过渡，外侧索引密度约增至 `factor=2`。固定网格全程不动，不引入 ALE 或含时重映射。
 
@@ -106,7 +113,7 @@ G=e^\omega[\rho_0(x,y)+tA(x,y)],\quad
 
 ## 4. 一次完整 RHS 的契约
 
-`ipm_cr.rhs(s,ctx)` 经内部 `evolve.residual/evolve.rhs` 创建本阶段背景并完成下列绑定计算：
+`ipm_cr.rhs(s,ctx)` 在一个入口中创建本阶段背景并完成下列绑定计算：
 
 1. 同时同步 `η` ghost，重建完整 `W=η+H`。
 2. 计算残差物理导数并同步其源 ghost，组装 `q=D_Xη+G_X`。

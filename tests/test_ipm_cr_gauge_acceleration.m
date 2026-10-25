@@ -29,16 +29,17 @@ report=struct('kind','frozen_density_transport_partials_and_legacy_IPC_compariso
 persist(outputDir,report);
 try
     if o.includeInitial
-        [state,g,wallOps,method]=ipm_cr.evolve.init(o.explicitOptions);
+        [state,ctx]=ipm_cr.init(o.explicitOptions);
+        g=ctx.mesh;wallOps=ctx.wall;method=ctx.opts;
         row=check_state('analytic_initial',state,g,wallOps,method,o);
         row.checkpoint=struct('used',false);report.records=append(report.records,row);
         report.elapsedSeconds=toc(timer);persist(outputDir,report);
     end
     if o.includeTau200
         [cp,pointer]=load_endpoint(o.checkpointFolder);
-        beforeRho=cp.state.rho;
+        beforeRho=cp.state.W;
         row=check_state('accepted_tau200_density',cp.state,cp.geometry,cp.wallOps,cp.explicitOptions,o);
-        assert(isequaln(beforeRho,cp.state.rho),'ipm_cr:GaugeTestMutation','The loaded accepted density changed.');
+        assert(isequaln(beforeRho,cp.state.W),'ipm_cr:GaugeTestMutation','The loaded accepted density changed.');
         assert_unchanged(o.checkpointFolder,pointer);
         row.checkpoint=struct('used',true,'pointer',pointer,'shaVerifiedBeforeAndAfter',true, ...
             'densityChanged',false,'timeAdvanced',0);
@@ -77,12 +78,16 @@ o.checkpointFolder=char(o.checkpointFolder);
 end
 
 function row=check_state(name,state,g,wallOps,method,o)
-timer=tic;rho=ipm_cr.mesh.fill(state.rho,g);
-guess=[state.flow.c_l,state.flow.c_r];
+timer=tic;rho=ipm_cr.mesh.fill(state.W,g);
+guess=[state.rhs.c_l,state.rhs.c_r];
 % Compute one current, complete physical state. The legacy comparison below
 % consumes this exact q and Poisson result; it never recomputes either one.
 ctx=ipm_cr.context(g,wallOps,method);
-fresh=ipm_cr.evolve.rhs(rho,g,wallOps,method,guess,[],true,ctx);
+% This diagnostic intentionally tests the unsplit density operator even
+% when its input accepted state also contains an analytic residual.
+trial=state;if isfield(trial,'eta'),trial=rmfield(trial,'eta');end
+trial.W=rho;trial.ctxId=ctx.id;trial.ctxKey=ctx.key;
+fresh=ipm_cr.rhs(trial,ctx,true);
 physical=fresh.physical;
 [r,map]=wall_map(g,wallOps.x);
 R=sample_wall(rho,map);R(1,:)=0;
@@ -258,10 +263,9 @@ function [cp,pointer]=load_endpoint(folder)
 assert(startsWith(folder,filesep),'ipm_cr:GaugeTestCheckpoint','Use an absolute checkpoint folder.');
 recorded=jsondecode(fileread(fullfile(folder,'latest.json')));
 if strcmp(recorded.kind,'ipm_cr_explicit_accepted_pointer_v1')
-    [cp,pointer]=ipm_cr.io.checkpoint('legacy',folder);
+    [cp,pointer]=ipm_cr.io.checkpoint('import',folder);
 else
     [cp,pointer]=ipm_cr.io.checkpoint('load',folder);
-    cp.state=ipm_cr.internal.state(cp.state,'old');
 end
 assert(pointer.tau==200&&cp.state.scale.canonicalTime==200, ...
     'ipm_cr:GaugeTestCheckpoint','The frozen-state comparison requires an accepted tau200 state.');
@@ -292,7 +296,7 @@ end
 
 function inventory=source_inventory()
 paths={mfilename('fullpath'),which('ipm_cr.op.prepare'),which('ipm_cr.op.apply'),which('ipm_cr.gauge.rates'), ...
-    which('ipm_cr.evolve.rhs'),which('ipm_cr.mesh.fill'), ...
+    which('ipm_cr.rhs'),which('ipm_cr.mesh.fill'), ...
     which('ipm_cr.mesh.sample'),which('ipm_cr.mesh.diff'), ...
     which('ipm_cr.poisson.apply'),which('ipm_cr.gauge.seed'),which('ipm_cr.gauge.measure')};
 if ~endsWith(paths{1},'.m'),paths{1}=[paths{1},'.m'];end

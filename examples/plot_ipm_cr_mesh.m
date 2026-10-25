@@ -19,16 +19,16 @@ if ~isfolder(outputDir),mkdir(outputDir);end
 % Current v2 uses a portable slot basename validated by the checkpoint API.
 header=jsondecode(fileread(fullfile(checkpointFolder,'latest.json')));
 if isfield(header,'kind')&&strcmp(header.kind,'ipm_cr_explicit_accepted_pointer_v1')
-    mode='legacy';
+    mode='import';
 else
     mode='load';
 end
 [cp,pointer]=ipm_cr.io.checkpoint(mode,checkpointFolder);
-if strcmp(mode,'legacy'),checkpointPath=pointer.path;
+if strcmp(mode,'import'),checkpointPath=pointer.path;
 else,checkpointPath=fullfile(checkpointFolder,pointer.path);end
-% This lossless local adapter changes field names only; no context is
-% constructed and no RHS, background, interpolation or time step is run.
-state=ipm_cr.internal.state(cp.state,'new');g=cp.geometry;c=g.core;p=g.polar;
+% The checkpoint API normalizes imported state fields without writing it;
+% no context, RHS, background, interpolation or time step is run here.
+state=cp.state;g=cp.geometry;c=g.core;p=g.polar;
 assert(state.scale.canonicalTime==pointer.tau&&state.step==pointer.sequence, ...
     'ipm_cr:PlotState','The displayed state must equal the accepted pointer.');
 blue=[.12,.31,.48];orange=[.64,.29,.16];gray=[.62,.65,.68];

@@ -3,12 +3,12 @@ function values=fields(state,g,method,x,y)
 assert(isnumeric(x)&&isreal(x)&&~isempty(x)&&isnumeric(y)&&isreal(y)&& ...
     isequal(size(x),size(y))&&all(isfinite(x),'all')&&all(isfinite(y),'all'), ...
     'ipm_cr:SampleQueries','Use matching nonempty finite real coordinate arrays.');
-assert(isfield(state.flow,'diagnosticsComplete')&&state.flow.diagnosticsComplete, ...
+assert(isfield(state.rhs,'diagnosticsComplete')&&state.rhs.diagnosticsComplete, ...
     'ipm_cr:SampleDiagnostics','Sample a complete accepted endpoint.');
-if ~isfield(state,'residual')
-    f=state.flow;u1=struct('core',f.physical.core.u1,'polar',f.physical.polar.u1);
+if ~isfield(state,'eta')
+    f=state.rhs;u1=struct('core',f.physical.core.u1,'polar',f.physical.polar.u1);
     u2=struct('core',f.physical.core.u2,'polar',f.physical.polar.u2);
-    values=struct('W',ipm_cr.mesh.sample(state.rho,g,x,y), ...
+    values=struct('W',ipm_cr.mesh.sample(state.W,g,x,y), ...
         'q',ipm_cr.mesh.sample(f.q,g,x,y),'Q',ipm_cr.mesh.sample(f.Q,g,x,y), ...
         'F',ipm_cr.mesh.sample(f.F,g,x,y), ...
         'u1Centered',ipm_cr.mesh.sample(u1,g,x,y)-f.Uref, ...
@@ -16,12 +16,12 @@ if ~isfield(state,'residual')
         'scalars',scalar_values(state));return;
 end
 b=ipm_cr.model.background(method.background,state.scale,x,y);
-eta=ipm_cr.mesh.sample(state.residual,g,x,y);
-d=ipm_cr.mesh.diff(state.residual,g);
+eta=ipm_cr.mesh.sample(state.eta,g,x,y);
+d=ipm_cr.mesh.diff(state.eta,g);
 qr=ipm_cr.mesh.fill(struct('core',d.core.x,'polar',d.polar.x),g);
-d=ipm_cr.mesh.diff(state.flow.residualRhs,g);
+d=ipm_cr.mesh.diff(state.rhs.residualRhs,g);
 Qr=ipm_cr.mesh.fill(struct('core',d.core.x,'polar',d.polar.x),g);
-f=state.flow;Ht=f.c_omega*b.H-(f.c_l*x+f.c_r).*b.x-f.c_l*y.*b.y+f.c_r*b.originX;
+f=state.rhs;Ht=f.c_omega*b.H-(f.c_l*x+f.c_r).*b.x-f.c_l*y.*b.y+f.c_r*b.originX;
 Htx=(f.c_omega-f.c_l)*b.x-(f.c_l*x+f.c_r).*b.xx-f.c_l*y.*b.xy;
 % These explicit-background time terms already include dt_physical/dtau.
 Ht=Ht+b.timeH;Htx=Htx+b.timeX;
@@ -37,7 +37,7 @@ end
 
 function v=rate_values(s)
 v=struct('names',{{'c_l','c_omega','c_r','delta','Uref','transportOrigin'}}, ...
-    'values',[s.flow.c_l,s.flow.c_omega,s.flow.c_r,s.flow.delta,s.flow.Uref,s.flow.transportOrigin]);
+    'values',[s.rhs.c_l,s.rhs.c_omega,s.rhs.c_r,s.rhs.delta,s.rhs.Uref,s.rhs.transportOrigin]);
 end
 
 function v=scalar_values(s)

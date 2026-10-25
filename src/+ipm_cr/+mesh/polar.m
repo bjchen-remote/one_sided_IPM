@@ -7,6 +7,9 @@ function grid = polar(options)
 % The default r(s)=R*sinh(alpha*s)/sinh(alpha) has a smooth ODD continuation
 % across the signed physical wall.  Explicit radialMap='exp_gaps' retains
 % the old increasing-gap geometry for historical diagnostic comparisons.
+% This constructor returns axes, coordinates and the radial map metric;
+% it does not build origin jets or transport derivative operators.
+% originRings/originFitDegree remain validated for legacy option structs.
 % No rectangle is replaced by a half disk silently.
 % Requires the original ipm_cr.mesh.fd on the MATLAB search path.
 if nargin<1,options=struct();end
@@ -79,56 +82,17 @@ cosTheta([1,end])=[1,-1];sinTheta([1,end])=0;
 if mod(ntheta,2)==1
     cosTheta((ntheta+1)/2)=0;sinTheta((ntheta+1)/2)=1;
 end
-R=repmat(r,1,ntheta);Theta=repmat(theta,nr,1);
 X=r*cosTheta;Y=r*sinTheta;
-Dr=ipm_cr.mesh.fd(r,1,width);Drr=ipm_cr.mesh.fd(r,2,width);
-Dtheta=ipm_cr.mesh.fd(theta,1,width);
-Dthetatheta=ipm_cr.mesh.fd(theta,2,width);
 logical=linspace(0,1,nr)';radialMetric=ipm_cr.mesh.fd(logical,1,7)*r;
-signedWallX=[-flipud(r(2:end));r]';wallLogical=linspace(-1,1,2*nr-1);
-signedWallMetric=(ipm_cr.mesh.fd(wallLogical,1,7)*signedWallX')';
-assert(all(radialMetric>0)&&all(signedWallMetric>0),'polar:GridMetric', ...
-    'The radial and joined-wall mapped WENO metrics must remain positive.');
-% Constrain the constant term to the single origin value.  Fit Cartesian
-% total degree four or six, retaining x,y,x^2,xy,y^2 as the first five columns for
-% every consumer of the first/second derivative jet.  Normalize coordinates
-% so very small first radial gaps do not spoil its rank.
-rows=2:(originRings+1);fitScale=r(rows(end));
-fitX=X(rows,:)/fitScale;fitY=Y(rows,:)/fitScale;
-a=fitX(:);b=fitY(:);
-powers=zeros((originFitDegree+1)*(originFitDegree+2)/2-1,2);column=0;
-for degree=1:originFitDegree
-    for yPower=0:degree
-        column=column+1;powers(column,:)=[degree-yPower,yPower];
-    end
-end
-design=zeros(numel(a),size(powers,1));
-for column=1:size(powers,1)
-    design(:,column)=a.^powers(column,1).*b.^powers(column,2);
-end
-names={'x','y','xSquared','xy','ySquared', ...
-    'xCubed','xSquaredY','xySquared','yCubed', ...
-    'xFourth','xCubedY','xSquaredYSquared','xyCubed','yFourth'};
-for column=15:size(powers,1)
-    names{column}=sprintf('xPower%dYPower%d',powers(column,1),powers(column,2));
-end
-[fitQ,fitR]=qr(design,0);
-assert(rcond(fitR)>1e-10,'polar:OriginFitCondition', ...
-    'The near-origin Cartesian fit is rank deficient or ill conditioned.');
-originFit=struct('rows',rows,'scale',fitScale,'map',fitR\fitQ', ...
-    'degree',originFitDegree,'coefficientOrder',{names}, ...
-    'coefficientPowers',powers, ...
-    'rankCondition',rcond(fitR),'constantTerm','single shared values(1,1)');
+assert(all(radialMetric>0),'polar:GridMetric', ...
+    'The radial mapped WENO metric must remain positive.');
 grid=struct('kind','independent_polar_half_disk_tensor_v1','domain',domain, ...
     'nr',nr,'ntheta',ntheta,'rmax',rmax,'firstSpacing',firstSpacing, ...
     'radialMap',radialMap,'radialMapParameter',mapParameter, ...
     'signedWallMapSmoothAtOrigin',ismember(radialMap,{'sinh','uniform_core'}), ...
-    'r',r,'theta',theta,'R',R,'Theta',Theta, ...
+    'r',r,'theta',theta, ...
     'X',X,'Y',Y,'cosTheta',cosTheta,'sinTheta',sinTheta, ...
-    'Dr',Dr,'Drr',Drr,'Dtheta',Dtheta,'Dthetatheta',Dthetatheta, ...
-    'radialMetric',radialMetric,'signedWallX',signedWallX, ...
-    'signedWallMetric',signedWallMetric, ...
-    'stencilWidth',width,'originFit',originFit, ...
+    'radialMetric',radialMetric,'stencilWidth',width, ...
     'originIsSinglePhysicalPoint',true,'originalRectanglePreserved',false);
 if strcmp(radialMap,'exp_gaps'),grid.radialGapRatio=exp(mapParameter);end
 if strcmp(radialMap,'uniform_core'),grid.uniformCoreInfo=uniformCoreInfo;end

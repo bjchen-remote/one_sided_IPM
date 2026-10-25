@@ -322,7 +322,7 @@ end
 
 function result=temporal_test(o,folder,timer,report)
 method=o.timeExplicitOptions;method.timeIntegrator='rk4';method.cfl=.3;
-[initial,g,wallOps,method,ctx]=ipm_cr.evolve.init(method);
+[initial,ctx]=ipm_cr.init(method);g=ctx.mesh;wallOps=ctx.wall;method=ctx.opts;
 rows=struct([]);states=cell(1,o.timeLevels);
 result=struct('kind','complete_IPM_production_RK4_fixed_grid_self_convergence', ...
     'targetTau',o.timeFinalTau,'baseSteps',o.timeBaseSteps,'levels',o.timeLevels, ...
@@ -335,7 +335,7 @@ result=struct('kind','complete_IPM_production_RK4_fixed_grid_self_convergence', 
     'gaugeScope','Initial and accepted endpoint residuals; stage scope is additionally recorded when production advance exposes it.');
 for level=1:o.timeLevels
     n=o.timeBaseSteps*2^(level-1);dt=o.timeFinalTau/n;state=initial;runTimer=tic;
-    method.maxDt=dt;maximumCfl=0;maximumGauge=max(abs(initial.flow.gaugeResidual));
+    method.maxDt=dt;maximumCfl=0;maximumGauge=max(abs(initial.rhs.gaugeResidual));
     productionMethods={};peakStageRecords=struct([]);eventRecords=struct([]);
     actualSteps=0;minimumActualDt=dt;
     for step=1:n
@@ -354,7 +354,7 @@ for level=1:o.timeLevels
                 'The actual production advance did not report RK4.');
             actualSteps=actualSteps+1;minimumActualDt=min(minimumActualDt,actual);
             maximumCfl=max(maximumCfl,info.realizedMaximumStageCfl);
-            maximumGauge=max(maximumGauge,max(abs(next.flow.gaugeResidual)));
+            maximumGauge=max(maximumGauge,max(abs(next.rhs.gaugeResidual)));
             if isfield(info,'maximumStageGaugeResidual')
                 maximumGauge=max(maximumGauge,info.maximumStageGaugeResidual);
                 result.gaugeScope='All production RK4 stages and the accepted endpoint, reported by advance.maximumStageGaugeResidual.';
@@ -379,8 +379,8 @@ for level=1:o.timeLevels
         'originalPeakEventSplits',eventRecords,'actualTau',state.scale.canonicalTime, ...
         'seconds',toc(runTimer),'maximumStageCfl',maximumCfl,'maximumRecordedGaugeResidual',maximumGauge, ...
         'productionMethods',{productionMethods},'scalars',scalar_values(state), ...
-        'finalGaugeResidual',state.flow.gaugeResidual,'rates',[state.flow.c_l,state.flow.c_omega,state.flow.c_r]);
-    row.analyticBackgroundVariableChange=isfield(state,'residual');
+        'finalGaugeResidual',state.rhs.gaugeResidual,'rates',[state.rhs.c_l,state.rhs.c_omega,state.rhs.c_r]);
+    row.analyticBackgroundVariableChange=isfield(state,'eta');
     row.peakDiagnostics=peak_summary(peakStageRecords);
     rows=append(rows,row);result.records=rows;
     report.temporal=result;report.elapsedSeconds=toc(timer);persist(folder,report);
@@ -388,7 +388,7 @@ for level=1:o.timeLevels
 end
 differences=struct([]);
 for j=1:numel(states)-1
-    a=states{j};b=states{j+1};fields=native_field_metrics(field_subtract(a.rho,b.rho),g);
+    a=states{j};b=states{j+1};fields=native_field_metrics(field_subtract(a.W,b.W),g);
     av=scalar_values(a);bv=scalar_values(b);delta=av.values-bv.values;
     delta(3)=(a.scale.physicalTime-b.scale.physicalTime)+ ...
         (a.scale.physicalTimeLow-b.scale.physicalTimeLow);
@@ -397,11 +397,11 @@ for j=1:numel(states)-1
         'W',fields,'scalarNames',{av.names},'scalarSignedDifferences',delta, ...
         'scalarAbsoluteDifferences',abs(delta),'scalarMixedRelativeDifferences',abs(delta)./scalarScale, ...
         'coupledScalarMixedInfinity',max(abs(delta)./scalarScale), ...
-        'gaugeResidualDifferenceInfinity',max(abs(a.flow.gaugeResidual-b.flow.gaugeResidual)), ...
-        'residualRepresentationPresent',isfield(a,'residual')&&isfield(b,'residual'), ...
+        'gaugeResidualDifferenceInfinity',max(abs(a.rhs.gaugeResidual-b.rhs.gaugeResidual)), ...
+        'residualRepresentationPresent',isfield(a,'eta')&&isfield(b,'eta'), ...
         'eta',struct()));
     if differences(end).residualRepresentationPresent
-        differences(end).eta=native_field_metrics(field_subtract(a.residual,b.residual),g);
+        differences(end).eta=native_field_metrics(field_subtract(a.eta,b.eta),g);
     else,differences(end).eta=struct();end
 end
 result.differences=differences;orders=struct([]);
@@ -409,7 +409,7 @@ fieldErrors=[differences.W];fieldErrors=[fieldErrors.allActiveInfinity];
 scalarErrors=[differences.coupledScalarMixedInfinity];
 result.WOrders=log2(fieldErrors(1:end-1)./fieldErrors(2:end));
 result.coupledScalarOrders=log2(scalarErrors(1:end-1)./scalarErrors(2:end));
-Wscale=max([1;abs(states{end}.rho.core(g.core.active));abs(states{end}.rho.polar(g.polar.active))]);
+Wscale=max([1;abs(states{end}.W.core(g.core.active));abs(states{end}.W.polar(g.polar.active))]);
 result.WRoundoffScreen=1024*eps(Wscale);
 result.fieldFourthOrderObserved=order_window(result.WOrders,fieldErrors,result.WRoundoffScreen);
 result.coupledScalarFourthOrderObserved=order_window(result.coupledScalarOrders,scalarErrors,1024*eps);

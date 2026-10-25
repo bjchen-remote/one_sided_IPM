@@ -52,9 +52,9 @@ try
     for j=1:3
         method=struct('geometry',geometry_options(plan(j),o.radialRedistribution),'timeIntegrator','rk4','cfl',o.cfl, ...
             'maxDt',o.maxDt,'solverOptions',o.solverOptions);
-        [initial,g,wallOps,method,ctx]=ipm_cr.evolve.init(method);
+        [initial,ctx]=ipm_cr.init(method);g=ctx.mesh;wallOps=ctx.wall;method=ctx.opts;
         assert(isequaln(g.geometryKey,geometryKeys{j}),'ipm_cr:IVPGeometry');
-        assert(isfield(initial,'residual'),'ipm_cr:IVPRepresentation','Use the analytic-background production path.');
+        assert(isfield(initial,'eta'),'ipm_cr:IVPRepresentation','Use the analytic-background production path.');
         if isempty(authority)
             authority=initial.originalAuthority;authorityWall=wallOps;
             if ~fixedQueries,queries=append_authority_wall(queries,wallOps.x);end

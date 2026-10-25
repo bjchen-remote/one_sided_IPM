@@ -4,8 +4,8 @@ function report=inspect_ipm_cr_explicit_endpoint(options)
 % operator is performed. OPTIONS.checkpointFolder is required explicitly;
 % expectedTau defaults to 200. The recorded spectral configuration is
 % followed by [64,64]/64/16 and [96,96]/128/24, all requireAccuracy=true.
-% States carrying eta use evaluateResidual at the saved scale/background;
-% other states use evaluate. Reconstructed complete rho must be identical.
+% The public RHS selects eta or unsplit W from the saved state itself.
+% Reconstructed complete centered density must be identical.
 % Recorded files, current package files and actual MATLAB resolutions must
 % match the checkpoint's SHA identity. A fresh outputDir is optional.
 % This diagnoses sensitivity of small Q to the Poisson discretization; it
@@ -39,16 +39,16 @@ assert(startsWith(outputDir,filesep)&&~isfolder(outputDir)&&~isfile(outputDir), 
     'ipm_cr:EndpointFreshOutput','Choose a fresh absolute endpoint-inspection output directory.');
 mkdir(outputDir);timer=tic;
 state=cp.state;g=cp.geometry;wallOps=cp.wallOps;method=cp.explicitOptions;
-hasResidual=isfield(state,'residual');
+hasResidual=isfield(state,'eta');
 if hasResidual
     sourceDefinition=['Fixed saved eta and scalar scale, including the compensated physical clock. ', ...
         'The same synchronized native D_X eta plus analytic background G_X is used at every level; ', ...
         'the analytic background is evaluated directly at each spectral grid and includes any saved physical-time tail.'];
-    evaluationPath='ipm_cr.evolve.residual';
+    evaluationPath='ipm_cr.rhs:eta';
 else
     sourceDefinition=['The same saved centered rho is synchronized and differentiated on the same native FD transport grids. ', ...
         'Only interpolation to the different spectral grids changes source reconstruction.'];
-    evaluationPath='ipm_cr.evolve.rhs';
+    evaluationPath='ipm_cr.rhs:W';
 end
 report=struct('kind','fixed_state_strict_Poisson_refinement_endpoint_inspection_v2', ...
     'status','running','outputDir',outputDir,'checkpoint',pointer,'expectedTau',expectedTau, ...
@@ -77,7 +77,7 @@ report.inspectionSource=struct('path',inspectionPath,'sha256',ipm_cr.io.sha(insp
 report.transportGeometry=struct('coreSize',size(g.core.X),'polarSize',size(g.polar.X), ...
     'coreSpacing',[g.core.dx,g.core.dy],'activeDofCount',g.activeDofCount, ...
     'outerRadius',g.polar.r(end),'geometryKey',g.geometryKey);
-report.recordedEndpoint=flow_summary(state.flow,g,method);
+report.recordedEndpoint=flow_summary(state.rhs,g,method);
 report.recordedEndpointOverlapAudit=ipm_cr.diag.overlap(state,g);
 ids={'coarse_fresh','core64_angle64_panel16','core96_angle128_panel24'};
 configs=cell(1,3);configs{1}=method.solverOptions;
@@ -100,28 +100,23 @@ for j=1:3
         'densityReconstructionAbsoluteDifference',NaN,'nativeSourceIdenticalToRecorded',false, ...
         'nativeSourceAbsoluteDifferenceToRecorded',NaN,'failure',struct());
     try
-        if hasResidual
-            [flow,reconstructed]=ipm_cr.evolve.residual(state.residual,state.scale, ...
-                g,wallOps,actual,[state.flow.c_l,state.flow.c_r],true,ctx);
-        else
-            [flow,reconstructed]=ipm_cr.evolve.rhs(state.rho,g,wallOps,actual, ...
-                [state.flow.c_l,state.flow.c_r],[],true,ctx);
-        end
+        trial=state;trial.ctxId=ctx.id;trial.ctxKey=ctx.key;
+        [flow,reconstructed]=ipm_cr.rhs(trial,ctx,true);
         entry.evaluateSeconds=toc(levelTimer);
-        entry.densityReconstructionIdenticalToRecorded=isequaln(reconstructed,state.rho);
+        entry.densityReconstructionIdenticalToRecorded=isequaln(reconstructed,state.W);
         entry.densityReconstructionAbsoluteDifference=max([ ...
-            max(abs(reconstructed.core-state.rho.core),[],'all'), ...
-            max(abs(reconstructed.polar-state.rho.polar),[],'all')]);
+            max(abs(reconstructed.core-state.W.core),[],'all'), ...
+            max(abs(reconstructed.polar-state.W.polar),[],'all')]);
         assert(entry.densityReconstructionIdenticalToRecorded, ...
             'ipm_cr:EndpointDensityChanged', ...
             'State-aware reconstruction changed saved rho (maximum difference %.17g).', ...
             entry.densityReconstructionAbsoluteDifference);
         entry.flowSummary=flow_summary(flow,g,actual);entry.poisson=flow.poisson;
-        entry.nativeSourceIdenticalToRecorded=isequaln(flow.q,state.flow.q);
+        entry.nativeSourceIdenticalToRecorded=isequaln(flow.q,state.rhs.q);
         entry.nativeSourceAbsoluteDifferenceToRecorded=max([ ...
-            max(abs(flow.q.core-state.flow.q.core),[],'all'), ...
-            max(abs(flow.q.polar-state.flow.q.polar),[],'all')]);
-        auditState=state;auditState.flow=flow;
+            max(abs(flow.q.core-state.rhs.q.core),[],'all'), ...
+            max(abs(flow.q.polar-state.rhs.q.polar),[],'all')]);
+        auditState=state;auditState.rhs=flow;
         entry.overlapAudit=ipm_cr.diag.overlap(auditState,g);
         entry.status='strict_evaluation_completed';flows{j}=flow;success(j)=true;
     catch problem
@@ -134,7 +129,7 @@ for j=1:3
     report.elapsedSeconds=toc(timer);write_report(outputDir,report);
 end
 if success(1)
-    report.recordedVsFreshCoarse=compare_flows(state.flow,flows{1},g,method);
+    report.recordedVsFreshCoarse=compare_flows(state.rhs,flows{1},g,method);
 end
 if success(1)&&success(2)
     report.comparisons.coarseVsFine=compare_flows(flows{1},flows{2},g,method);
@@ -165,7 +160,6 @@ function [cp,pointer]=load_endpoint(folder,expectedTau)
 [cp,pointer]=ipm_cr.io.checkpoint('load',folder);
 assert(pointer.tau==expectedTau,'ipm_cr:EndpointTime', ...
     'Require accepted tau %.17g; actual pointer is %.17g.',expectedTau,pointer.tau);
-cp.state=ipm_cr.internal.state(cp.state,'old');
 end
 
 function [bindings,resolvedFunctions]=verify_sources(inventory,root)
@@ -206,7 +200,7 @@ for j=1:numel(inventory)
     end
     if isempty(bindings),bindings=entry;else,bindings(end+1)=entry;end %#ok<AGROW>
 end
-symbols={'ipm_cr.evolve.rhs','ipm_cr.evolve.residual', ...
+symbols={'ipm_cr.rhs', ...
     'ipm_cr.poisson.apply','ipm_cr.psolver'};
 resolvedFunctions=struct([]);
 for j=1:numel(symbols)

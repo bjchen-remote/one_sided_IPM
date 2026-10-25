@@ -28,10 +28,10 @@ for name=required(3:end)
         'ipm_cr:SampleStateQueries','Every comparison region requires a nonempty matching logical mask.');
 end
 
-values=ipm_cr.diag.fields(state,g,method,q.x,q.y);f=state.flow;
+values=ipm_cr.diag.fields(state,g,method,q.x,q.y);f=state.rhs;
 diagnostic=struct('rawFullArrayReinterpolationDifference',struct());
 for name={'W','q','Q'}
-    key=name{1};field=state.rho;if ~strcmp(key,'W'),field=f.(key);end
+    key=name{1};field=state.W;if ~strcmp(key,'W'),field=f.(key);end
     raw=ipm_cr.mesh.sample(field,g,q.x,q.y);
     diagnostic.rawFullArrayReinterpolationDifference.(key)=region_metrics(raw-values.(key),q);
 end
