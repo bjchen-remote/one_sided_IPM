@@ -4,6 +4,7 @@
 !/.gitattributes
 !/README.md
 !/REPOSITORY.md
+!/main.m
 !/src/
 !/tests/
 !/tools/

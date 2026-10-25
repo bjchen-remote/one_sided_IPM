@@ -9,6 +9,19 @@ assert(c.domain.rmax==1e10&&m.geometry.grid.rmax==1e10&&m.solverOptions.rOuter==
 assert(strcmp(m.timeIntegrator,'rk4')&&m.cfl==.3&&~r.stop.steady.enabled);
 [r2,m2,p2]=ipm_cr.config(jsondecode(jsonencode(c)),'run');
 assert(isequaln(r,r2)&&isequaln(m,m2)&&isequaln(requested,p2));
+spaceFolder=char(java.io.File(fullfile(outputDir,'path with spaces')).getAbsolutePath());
+if ~isfolder(spaceFolder),mkdir(spaceFolder);end
+paths={spaceFolder,fullfile('result','relative path with spaces')};
+expected={spaceFolder,fullfile(pwd,paths{2})};
+if ispc
+    paths=[paths,{'C:\ipm cr case\output','\\server\share\ipm cr case'}];
+    expected=[expected,paths(3:4)];
+end
+for k=1:numel(paths)
+    pathCase=c;pathCase.run.outputDir=paths{k};resolved=ipm_cr.config(pathCase,'run');
+    assert(strcmp(resolved.outputDir,expected{k}),'ipm_cr:ConfigOutputPath', ...
+        'Absolute paths must be retained, and relative paths must resolve from the current directory.');
+end
 c.domain.rmax=1e8;c.run.outputDir='result/config_case';c.run.tauEnd=12;
 c.stop.physicalTime=.5;c.stop.steady.enabled=true;c.save.label='test';
 [r,m]=ipm_cr.config(c,'run');
@@ -34,6 +47,8 @@ expect(@()ipm_cr.config(struct('explicitOptions',struct('cfl',.3),'cfl',.2),'run
     'ipm_cr:Config');
 report=struct('kind','ipm_cr_case_configuration_v1','passed',true,'pdeSolved',false, ...
     'caseRoundtrip',true,'radiusCoupled',true,'aliasesAtOneBoundary',true, ...
+    'nativeAbsolutePathAndSpaces',true,'relativeOutputUsesCurrentDirectory',true, ...
+    'windowsDriveAndUNCChecksRun',ispc, ...
     'duplicateAndUnknownRejected',true,'backgroundFromSelectedDatum',true);
 ipm_cr.io.json(fullfile(outputDir,'config.json'),report);
 end

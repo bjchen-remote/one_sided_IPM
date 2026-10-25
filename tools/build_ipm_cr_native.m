@@ -22,7 +22,7 @@ if nargin<1||isempty(outputDir)
     outputDir=fullfile(results,['native_build_',token]);
 end
 outputDir=char(outputDir);
-assert(startsWith(outputDir,filesep),'ipm_cr:NativeBuildOutput','Use an absolute output directory.');
+assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:NativeBuildOutput','Use an absolute output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'native_build.json')), ...
     'ipm_cr:NativeBuildPreserve','Choose a fresh build report directory.');
@@ -36,9 +36,7 @@ if strcmp(backend,'auto')
     if ismac&&isfile(clt),selectedBackend='clt';else,selectedBackend='mex';end
 end
 args={'-R2018a','-outdir',packagePath,'-output','wenoMex',source};
-if ispc
-    args{end+1}='COMPFLAGS=$COMPFLAGS /fp:strict';
-else
+if ~ispc
     args{end+1}='CXXFLAGS=$CXXFLAGS -fno-fast-math -ffp-contract=off';
 end
 report=struct('kind','optional_smooth_weno_native_build_v3','status','running', ...
@@ -61,6 +59,21 @@ try
         assert(~isempty(compiler),'ipm_cr:NativeBuildCompiler','Select a C++ MEX compiler first.');
         report.compiler=struct('name',compiler.Name,'manufacturer',compiler.Manufacturer, ...
             'version',compiler.Version,'location',compiler.Location);
+        if ispc
+            manufacturer=lower(char(compiler.Manufacturer));name=lower(char(compiler.Name));
+            if contains(manufacturer,'microsoft')
+                args{end+1}='COMPFLAGS=$COMPFLAGS /fp:strict';
+                report.strictFloatingPointCompiler='Microsoft';
+            elseif contains(manufacturer,'gnu')||contains(name,'mingw')
+                args{end+1}='CXXFLAGS=$CXXFLAGS -fno-fast-math -ffp-contract=off';
+                report.strictFloatingPointCompiler='MinGW/GNU';
+            else
+                error('ipm_cr:NativeBuildCompiler', ...
+                    'Strict Windows builds require a selected Microsoft or MinGW/GNU C++ compiler; found %s (%s).', ...
+                    compiler.Name,compiler.Manufacturer);
+            end
+            report.mexArguments=args;
+        end
         buildLog=evalc('mex(args{:});');
         report.buildLog=fullfile(outputDir,'mex.log');
         write_text(report.buildLog,buildLog);
@@ -153,13 +166,10 @@ end
 function write_text(path,value)
 fid=fopen(path,'w');assert(fid>=0,'ipm_cr:NativeBuildLog','Cannot write %s.',path);
 cleanup=onCleanup(@()fclose(fid)); %#ok<NASGU>
-fwrite(fid,value,'char');
+fwrite(fid,unicode2native(char(value),'UTF-8'),'uint8');
 end
 
 function write_report(folder,report)
 save(fullfile(folder,'native_build.mat'),'report');
-fid=fopen(fullfile(folder,'native_build.json'),'w');
-assert(fid>=0,'ipm_cr:NativeBuildReport','Cannot save MEX build provenance.');
-cleanup=onCleanup(@()fclose(fid)); %#ok<NASGU>
-fwrite(fid,jsonencode(report,'PrettyPrint',true),'char');
+ipm_cr.io.json(fullfile(folder,'native_build.json'),report);
 end

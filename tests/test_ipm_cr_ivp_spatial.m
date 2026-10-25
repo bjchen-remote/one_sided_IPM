@@ -9,7 +9,7 @@ root=fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(root,'src'));
 if nargin<1||isempty(outputDir),outputDir=fullfile(root,'results','ivp_spatial');end
 o=resolve(options);outputDir=char(outputDir);
-assert(startsWith(outputDir,filesep),'ipm_cr:IVPOutput');
+assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:IVPOutput');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'ivp_spatial.json')),'ipm_cr:IVPPreserve','Choose a fresh output directory.');
 timer=tic;plan=struct('h',{.06,.03,.015},'nr',{193,385,769},'ntheta',{65,129,257});
@@ -190,7 +190,7 @@ validateattributes(o.timeRefinementFactor,{'numeric'},{'scalar','real','finite',
 validateattributes(o.refinementStartLevel,{'numeric'},{'scalar','finite','integer','nonnegative'});
 assert(isstruct(o.radialRedistribution)&&isscalar(o.radialRedistribution),'ipm_cr:IVPRadialRedistribution');
 o.queryCloudFile=char(o.queryCloudFile);
-assert(isempty(o.queryCloudFile)||(startsWith(o.queryCloudFile,filesep)&&isfile(o.queryCloudFile)), ...
+assert(isempty(o.queryCloudFile)||(java.io.File(o.queryCloudFile).isAbsolute()&&isfile(o.queryCloudFile)), ...
     'ipm_cr:IVPQueryCloud','Use an absolute existing MAT reference report.');
 end
 

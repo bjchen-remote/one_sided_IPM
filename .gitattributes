@@ -4,6 +4,7 @@
 *.sh text eol=lf
 *.cpp text eol=lf
 *.md text eol=lf
+*.json text eol=lf
 *.tex text eol=lf
 *.mat -text -diff
 *.png -text -diff

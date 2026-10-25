@@ -5,7 +5,7 @@ function report=test_runtime(outputDir)
 root=fileparts(fileparts(mfilename('fullpath')));addpath(fullfile(root,'src'));
 if nargin<1||isempty(outputDir),outputDir=fullfile(root,'results','runtime');end
 outputDir=char(outputDir);
-assert(startsWith(outputDir,filesep),'ipm_cr:RuntimeTestOutput','Use an absolute output directory.');
+assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:RuntimeTestOutput','Use an absolute output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'runtime.json')),'ipm_cr:RuntimeTestFresh','Use a fresh output directory.');
 timer=tic;source=ipm_cr.io.identity('source');
@@ -19,7 +19,7 @@ options=struct('outputDir',first,'tauEnd',.003,'wallSeconds',120,'verbose',false
 assert(strcmp(initial.status,'target_reached'),'ipm_cr:RuntimeTestInitial');
 [cp,pointer]=ipm_cr.io.checkpoint('load',first);
 assert(strcmp(pointer.path,'accepted_1.mat')||strcmp(pointer.path,'accepted_0.mat'),'ipm_cr:RuntimeTestRelative');
-assert(~startsWith(pointer.path,filesep)&&cp.state.step==state.step,'ipm_cr:RuntimeTestPayload');
+assert(~java.io.File(pointer.path).isAbsolute()&&cp.state.step==state.step,'ipm_cr:RuntimeTestPayload');
 
 % Match the split endpoint and cold refresh exactly in the direct reference.
 reference=ipm_cr.refresh(state,ctx);

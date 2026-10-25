@@ -4,7 +4,22 @@
 
 ## 1. 模块边界与公开入口
 
+根目录 `main.m` 是 MATLAB 编辑器 Run 和命令窗口的便捷入口，直接调用维护中的 `src/+ipm_cr`。它从 `config('case')` 构造 case，顶部集中设置目标、预算、输出、初值表达式和所选网格；数值默认解析仍由 `config` 完成。入口选用中层 h=.03、基准 nr=385/ntheta=129、固定远区重分配 factor=2 和谱次数 64/80/20，不把这份运行选择当作通用精度资格。
+
+```matlab
+[c,rho0] = main('config');    % 只返回 case 和向量化表达式
+[summary,s,ctx] = main(c);    % 使用 c.initial
+[summary,s,ctx] = main(c,rho0); % 物化任意表达式后运行
+```
+
+`main('config')` 不构建 MEX、网格或上下文，也不推进。`main()` 使用顶部 case 和 `rho0=@(x,y)(1+tanh(x)).*exp(-y.^2)`；`main(c,rho0)` 接受任意向量化、同形状、有限实数表达式。`tools/set_initial.m` 在实际 core/polar 节点与原固定参考轴上物化函数值，保存独立 SHA 输入并重算 I/P/C，不保存句柄、不进行 Gaussian 拟合。该路径设置 `background.kind='none'`，直接积分 W，不带 η。输入绑定输运网格，换网格须用原表达式重新构建。`main(c)` 按 `c.initial` 运行；当前没有外部离散数组 API。
+
+入口依据自身文件位置加入 `src/tools` 并定位输入；相对输出目录以项目根解析，保留绝对输出路径且不改变 `pwd`。高级 `ipm_cr.run` 的相对输出仍以调用者当前工作目录解析。项目相对 manifest 使用固定的 `/` 分隔规则；输出物理路径接受本平台的盘符、UNC 或 POSIX 绝对形式，二者不是同一种路径契约。
+
+含时运行缺少本平台 MEX 时，`main` 调用 `build_ipm_cr_native`；未选编译器时给出 `mex -setup C++` 指引，失败停止。该准备过程不更换 `linear5` 等数值选择。纯 MATLAB 入口不依赖 Python；现有 Python 监督器和验证启动器仍面向 macOS/Linux，Windows 实机行为另行验收。
+
 ```text
+main.m                             用户 case / 初值表达式 / 路径与本平台内核准备
 src/+ipm_cr/
   config / problem                 完整数值选项 / 物理初值与规范
   init / step / rhs / refresh       建立模拟 / 一个接受步 / 完整RHS / 同身份冷恢复
@@ -35,17 +50,17 @@ v = ipm_cr.sample(s,ctx,x,y);
 
 `init` 直接构造状态，`rhs` 直接组装本阶段背景与完整 RHS；没有第二套初始化或 RHS 分发入口。`step` 只返回一个接受步，`tauEnd` 是该步上限；完整时间循环由 `run` 管理。`rhs` 返回当前状态的完整求值，可用第二输出 `[eval,W]` 取得同步、重建后的完整中心化密度。`refresh` 在同一数学身份下调用它重建接受态 RHS；两者都不跨版本转换轨道。`sample` 接受匹配的规范坐标查询数组，不要求区域掩码。区域比较、采样范数和研究云在 `diag.compare`，不侵入通用采样。
 
-初始化、RK 阶段、诊断、history 和 v2 checkpoint 全程使用同一套 `W/eta/rhs` 字段；不再往返转换 `rho/residual/flow`。旧 v1 数据的命名转换仅在 `io.checkpoint('import',folder)` 这一只读边界发生；`'legacy'` 仍返回未经修改的历史 payload。导入不改写历史文件，也不授权新源码继续旧轨道。
+初始化、RK 阶段、诊断、history 和 v2 checkpoint 使用规范 `W/rhs` 字段；启用解析背景时另有 `eta`，表达式物化的无背景路径不带它。不再往返转换 `rho/residual/flow`。旧 v1 数据仅在 `io.checkpoint('import',folder)` 只读边界转换命名；`'legacy'` 返回原 payload，不授权新源码续接旧轨道。
 
-`config` 是完整数值选项的唯一默认来源，保持 `geometry/solverOptions/transport/cfl/maxDt/minDt/timeIntegrator/background` 字段。`pconfig` 只定义谱椭圆选项，不与含时 `config` 混用；`problem` 集中物理初值、原始规范和 authority。`data/initial.json` 是唯一初始文件定位与 SHA 清单，实际文件为 `data/reference/gaussian_t0.mat`。
+`config` 是完整数值选项的唯一默认来源，保持 `geometry/solverOptions/transport/cfl/maxDt/minDt/timeIntegrator/background` 字段。`pconfig` 只定义谱椭圆选项，不与含时 `config` 混用；`problem` 集中物理初值、原始规范和 authority。默认 manifest 为 `data/initial.json`，其原始文件为 `data/reference/gaussian_t0.mat`；选中的其他初值同样以项目相对 manifest 和 MAT SHA 定位。
 
-`model.initial` 仅实现原 Gaussian 初值，运算顺序与原 authority 一致；旧求解器的其他算例不混入维护实现。背景选项控制同一物理初值的解析分解，不改变原初值及 I/P/C 参考。
+`model.initial` 保留 Gaussian primitive 参数族及物化初值读取；原 Gaussian 参数的运算顺序与原 authority 一致。`set_initial` 表达式路径按保存的真实网格值初始化 W，不借 Gaussian 解析背景解释。背景选项只控制适用初值的表示，不改变选中初值及其 I/P/C 参考。
 
 `model.reference(cfg)` 直接读取已核 SHA 的原始 t0 frame，返回原墙算子、初始尺度、I/P/C 参考和规范初猜。原墙节点来自该 frame，原 `Dx`、密度/墙源一致性和 t0 时钟均重新核验；建立参考不构造输运网格，也不建立旧 Cartesian/polar 状态载体。
 
 `context` 是每次模拟独立的 handle，公开 `mesh/wall/opts/key/id/identity` 只读；固定 Poisson 计划和 `psolver` 句柄由它私有持有；墙采样 `wallR/wallMap` 对外只读，统计经 `ctx.stats()` 读取。不把每个局部函数改成类，不持有跨状态密度/源/规范观测；数组仍以 struct 和数值矩阵传递。模型、时间步与诊断只能使用匹配身份的状态和上下文。
 
-`tools/run_explicit_experiment.py` 和 `tools/run_validation.py` 通过 `tools/common.py` 统一冻结/校验规则；`tools/build_ipm_cr_native.m` 从源码构建 MEX。`tests` 只存验证与研究适配，`examples/poisson_demo.m` 是独立椭圆演示，不推进含时系统。
+`tools/run_explicit_experiment.py` 和 `tools/run_validation.py` 通过 `tools/common.py` 统一冻结/校验规则；`tools/build_ipm_cr_native.m` 从源码构建 MEX。Python 工具支持 macOS/Linux，不是 Windows 直接运行 `main.m` 的前置依赖。`tests` 只存验证与研究适配，`examples/poisson_demo.m` 是独立椭圆演示，不推进含时系统；本地历史 `test/main_cr.m` 不承担当前演化入口。
 
 旧 `test/+ipm_cr`、`time_evolution` 和旧运行器在本地保留但不再作为维护依赖或默认 MATLAB 路径；所需旧公共数值函数已收进相应新包，完整旧算法仍在 [`legacy/solvers`](https://github.com/bjchen-remote/one_sided_IPM/tree/legacy/solvers)。`test/prototypes/`、`experiments/`、历史结果及冻结 runtime 保持原位，不能自动清理或借当前包替换旧实验身份。
 
@@ -170,7 +185,9 @@ Newton 目标为 `16eps`，线搜索停滞且残差不超过 `2e-12` 时允许�
 
 双槽写完、读回并核验 SHA 后才原子更新 `latest.json`，指针中的 `path` 仅为槽文件 basename，失败文件不成为恢复指针。源码身份采用相对路径，允许完整冻结目录在不改变输入内容的前提下迁移；这不允许更换代码或方法后续接旧轨道。
 
-Python 管理器冻结当前 `src`、工具、选项、`data/initial.json` 和其引用输入，再监督同一 `ipm_cr.run` 入口。不遍历复制本地保留的旧求解器或原型，冻结和 MATLAB 入口必须使用一致的源码/输入身份。预算、人工停止、资源中止、求解失败和目标达到分别记录；累计 MATLAB 成本与含启停的监督成本分别报告。旧结果和冻结 runtime 保留其原 SHA，不迁移或重写历史实验身份。
+`main(c)` 继续使用同一 `run` 事务，不维护另一套 checkpoint。改变初值或网格须换输出目录；身份冲突报错，不能删除旧数据后静默重启。恢复还需保持本平台 MEX 字节身份；跨平台重编译不自动授权接续另一平台的旧轨道。
+
+Python 管理器冻结当前 `src`、工具、选项、默认与选中的 manifest/MAT，再监督同一 `ipm_cr.run` 入口。不遍历复制本地保留的旧求解器或原型，冻结和 MATLAB 入口必须使用一致的源码/输入身份。预算、人工停止、资源中止、求解失败和目标达到分别记录；累计 MATLAB 成本与含启停的监督成本分别报告。旧结果和冻结 runtime 保留其原 SHA，不迁移或重写历史实验身份。
 
 ## 8. 维护与证据分工
 
@@ -191,9 +208,9 @@ Python 管理器冻结当前 `src`、工具、选项、`data/initial.json` 和�
 
 ## 发布配置与数据边界（2026-10-24）
 
-`config()` 保留完整方法接口；`config('case')` 返回唯一用户 case 模板，含 initial/domain/method/run/stop/save，`config(case,'run')` 统一解析后供生产 runner 使用。旧 mesh/poisson 和 explicitOptions 仅在此边界归一化，重复输入拒绝；run 不再维护另一份默认值或别名逻辑。唯一默认解析背景来自选中 manifest 的 Gaussian 参数，init 复用它判断严格零 eta 初态。
+`config()` 保留完整方法接口；`config('case')` 返回用户 case 模板，含 initial/domain/method/run/stop/save，`config(case,'run')` 统一解析后供 runner 使用。旧 mesh/poisson 和 explicitOptions 仅在此边界归一化。Gaussian manifest 的解析背景来自其参数，init 据此判断严格零 eta 初态；表达式物化输入采用 background none，不带 eta。
 
-`problem(initial)` 和 `io.identity('authority',root,initial)` 绑定项目相对 manifest 与 MAT 的 SHA。`make_initial` 为 Gaussian 参数族生成新的固定测量轴 authority 和 I/P/C。context 在准备前后核验源码及初值身份，将该身份纳入只读 key；pack 必须核对创建时身份，不能用导出时的输入把旧状态重新命名。
+`problem(initial)` 和 `io.identity('authority',root,initial)` 绑定项目相对 manifest 与 MAT 的 SHA。`make_initial` 服务 Gaussian 参数族；`set_initial` 为任意向量化表达式保存真实输运值、原固定参考轴及重算的 I/P/C。context 在准备前后核验源码及初值身份，将其纳入只读 key；pack 核对创建时身份，不能用导出时的输入重命名旧状态。
 
 内部时间步仅为 `time.step(state,ctx,finalTau,controls)`；controls 限四项时间策略。几何、原墙和完整方法由 ctx 提供，不存在缺失 ctx 时临时重建的维护分支。数值 RK、峰事件、全阶段 CFL 及 Poisson 直接回退不变。
 

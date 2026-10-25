@@ -12,7 +12,7 @@ assert(isstruct(options)&&isscalar(options)&&all(ismember(fieldnames(options),{'
 includeInitial=true;if isfield(options,'includeInitial'),includeInitial=options.includeInitial;end
 initialOptions=struct();if isfield(options,'initialOptions'),initialOptions=options.initialOptions;end
 validateattributes(includeInitial,{'logical'},{'scalar'});
-outputDir=char(outputDir);assert(startsWith(outputDir,filesep),'ipm_cr:BackgroundTestOutput');
+outputDir=char(outputDir);assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:BackgroundTestOutput');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'background.json')),'ipm_cr:BackgroundTestPreserve','Choose a fresh output directory.');
 timer=tic;cfg=ipm_cr.problem();p=cfg.physics;

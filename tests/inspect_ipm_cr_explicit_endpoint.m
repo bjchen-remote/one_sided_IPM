@@ -24,7 +24,7 @@ assert(isfield(options,'checkpointFolder')&& ...
 folder=options.checkpointFolder;
 folder=char(folder);expectedTau=option(options,'expectedTau',200);
 validateattributes(expectedTau,{'numeric'},{'scalar','real','finite','positive'});
-assert(startsWith(folder,filesep),'ipm_cr:EndpointFolder','checkpointFolder must be absolute.');
+assert(java.io.File(folder).isAbsolute(),'ipm_cr:EndpointFolder','checkpointFolder must be absolute.');
 [cp,pointer]=load_endpoint(folder,expectedTau);
 [sourceBindings,resolvedFunctions]=verify_sources(cp.sourceInventory,root);
 if isfield(options,'outputDir')
@@ -35,7 +35,7 @@ else
     outputDir=fullfile(parent,['explicit_endpoint_poisson_', ...
         char(datetime('now','Format','yyyyMMdd_HHmmss_SSS')),'_',token]);
 end
-assert(startsWith(outputDir,filesep)&&~isfolder(outputDir)&&~isfile(outputDir), ...
+assert(java.io.File(outputDir).isAbsolute()&&~isfolder(outputDir)&&~isfile(outputDir), ...
     'ipm_cr:EndpointFreshOutput','Choose a fresh absolute endpoint-inspection output directory.');
 mkdir(outputDir);timer=tic;
 state=cp.state;g=cp.geometry;wallOps=cp.wallOps;method=cp.explicitOptions;

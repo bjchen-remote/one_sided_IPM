@@ -21,9 +21,14 @@ function [opts,cfg]=method_options(overrides)
 initial='data/initial.json';
 if isfield(overrides,'initial'),initial=overrides.initial;end
 cfg=ipm_cr.problem(initial);p=cfg.physics;
-cfg.background=struct('kind','gaussian_primitive','amplitude',p.gaussianAmplitude, ...
-    'centerX',p.gaussianCenterX,'widthX',p.gaussianWidthX,'widthY',p.gaussianWidthY, ...
-    'skewWeight',p.gaussianSkewWeight,'tailCorrection',true);
+sampled=isfield(p,'initialCondition')&&strcmp(p.initialCondition,'sampled_density');
+if sampled
+    cfg.background=struct('kind','none');
+else
+    cfg.background=struct('kind','gaussian_primitive','amplitude',p.gaussianAmplitude, ...
+        'centerX',p.gaussianCenterX,'widthX',p.gaussianWidthX,'widthY',p.gaussianWidthY, ...
+        'skewWeight',p.gaussianSkewWeight,'tailCorrection',true);
+end
 transport=cfg.transport;transport.reconstruction='linear5';transport.smoothSpeedCoefficient=.1;
 opts=struct('geometry',struct(),'solverOptions',struct('coreDegree',[48,48], ...
     'angularDegree',64,'polarDegree',16,'rOuter',1e10), ...
@@ -42,6 +47,10 @@ assert(opts.minDt<=opts.maxDt,'ipm_cr:Config','minDt must not exceed maxDt.');
 opts.timeIntegrator=char(validatestring(opts.timeIntegrator,{'rk4','ssprk3'}));
 for name={'geometry','solverOptions','transport','background'}
     assert(isstruct(opts.(name{1}))&&isscalar(opts.(name{1})),'ipm_cr:Config','Use scalar module options.');
+end
+if sampled
+    assert(isfield(opts.background,'kind')&&strcmp(opts.background.kind,'none'), ...
+        'ipm_cr:SampledBackground','A sampled density requires background.kind=''none''; no analytic background is defined.');
 end
 if isfield(opts.geometry,'grid'),retire_origin(opts.geometry.grid);end
 if isfield(opts.geometry,'grid')&&isfield(opts.geometry.grid,'rmax')&&isfield(opts.solverOptions,'rOuter')
@@ -126,7 +135,7 @@ assert((ischar(opts.outputDir)&&isrow(opts.outputDir))|| ...
     (isstring(opts.outputDir)&&isscalar(opts.outputDir)),'ipm_cr:Config','outputDir must be text.');
 opts.outputDir=char(opts.outputDir);
 assert(~isempty(opts.outputDir),'ipm_cr:RunOutput','Choose a nonempty output directory.');
-if ~startsWith(opts.outputDir,filesep),opts.outputDir=fullfile(pwd,opts.outputDir);end
+if ~java.io.File(opts.outputDir).isAbsolute(),opts.outputDir=fullfile(pwd,opts.outputDir);end
 for name={'tauEnd','wallSeconds','checkpointEveryTau','checkpointWallSeconds','logEveryTau'}
     validateattributes(opts.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
 end

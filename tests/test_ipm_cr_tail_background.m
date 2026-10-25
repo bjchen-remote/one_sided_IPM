@@ -11,7 +11,7 @@ assert(isstruct(options)&&isscalar(options)&&all(ismember(fieldnames(options), .
 includeInitial=true;if isfield(options,'includeInitial'),includeInitial=options.includeInitial;end
 initialOptions=struct();if isfield(options,'initialOptions'),initialOptions=options.initialOptions;end
 validateattributes(includeInitial,{'logical'},{'scalar'});
-outputDir=char(outputDir);assert(startsWith(outputDir,filesep),'ipm_cr:TailTestOutput');
+outputDir=char(outputDir);assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:TailTestOutput');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'tail_background.json')),'ipm_cr:TailTestPreserve','Choose a fresh output directory.');
 cfg=ipm_cr.problem();p=cfg.physics;

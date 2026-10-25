@@ -8,7 +8,7 @@ if nargin<2,options=struct();end
 root=fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(root,'src'));
 if nargin<1||isempty(outputDir),outputDir=fullfile(root,'results','poisson_backward_diagnostic');end
-o=resolve(options);outputDir=char(outputDir);assert(startsWith(outputDir,filesep),'ipm_cr:BackwardOutput');
+o=resolve(options);outputDir=char(outputDir);assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:BackwardOutput');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'poisson_backward.json')),'ipm_cr:BackwardPreserve','Choose a fresh output directory.');
 timer=tic;report=struct('kind','original_discrete_Poisson_componentwise_backward_diagnostic_v1', ...

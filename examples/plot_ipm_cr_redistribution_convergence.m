@@ -9,7 +9,7 @@ if nargin<2||isempty(newFile),newFile=fullfile(results,'radial_redistribution_ta
 if nargin<3||isempty(validationFile),validationFile=fullfile(results,'radial_redistribution_tau10_20261022','validation','radial_redistribution.json');end
 if nargin<4||isempty(outputDir),outputDir=fullfile(results,'radial_redistribution_tau10_20261022','figures','redistribution_convergence');end
 oldFile=char(oldFile);newFile=char(newFile);validationFile=char(validationFile);outputDir=char(outputDir);
-assert(all(cellfun(@(p)startsWith(p,filesep),{oldFile,newFile,validationFile,outputDir})), ...
+assert(all(cellfun(@(p)java.io.File(p).isAbsolute(),{oldFile,newFile,validationFile,outputDir})), ...
     'ipm_cr:RedistributionPlotPaths','Use absolute input and output paths.');
 timer=tic;source=mfilename('fullpath');if ~endsWith(source,'.m'),source=[source,'.m'];end
 scriptIdentity=file_identity(source);

@@ -16,9 +16,28 @@
 
 点击图片可查看矢量 PDF；[完整图注、配置与复现说明](docs/MESH.md)。
 
-## 安装与短程计算
+## 在 MATLAB 中直接运行
 
-需要 MATLAB、Python 3；原生内核需要兼容的 C++ 编译器。MATLAB 在项目根目录执行：
+打开项目根目录的 `main.m`，在顶部设置参数和初值表达式，然后点击编辑器 **Run**；也可执行 `main`。默认表达式为 `@(x,y)(1+tanh(x)).*exp(-y.^2)`，目标 τ=200、调用预算600秒、输出为项目根 `result`、外半径为 `1e10`。入口选择 h=.03、基准 nr=385/ntheta=129、远区重分配 factor=2、Poisson 次数64/80/20。预算耗尽会保存接受态，不保证600秒达到τ=200。
+
+这一路径需要 MATLAB 和兼容的 C++ 编译器，不需要 Python。缺少本平台 MEX 时，`main` 自动调用 `build_ipm_cr_native`；尚未配置编译器时按提示执行 `mex -setup C++`，再运行。内核从源码在本机生成，二进制不入库，也不会自动切换重构算法。
+
+```matlab
+[c,rho0] = main('config');           % 只返回 case 和表达式；不构建或求解
+c.run.tauEnd = .003;
+c.run.wallSeconds = 120;
+c.run.outputDir = 'result/smoke';
+rho0 = @(x,y)(1+tanh(x)).*exp(-y.^2);
+[summary,s,ctx] = main(c,rho0);
+```
+
+`main(c)` 使用 `c.initial`；`main(c,rho0)` 接受任意向量化表达式，须返回与坐标同形状的有限实数。`tools/set_initial.m` 在实际 core/polar 节点和原固定参考轴上物化函数值，保存独立 SHA 输入并重算 I/P/C；不保存句柄，不做 Gaussian 拟合。该路径使用 `background.kind='none'`，直接积分 W，不带 η。物化初值绑定输运网格，换网格须用原表达式重建并换输出目录；身份冲突会拒绝，旧数据保留。
+
+`main` 的相对输出路径以项目根目录定位，调用不要求切换当前工作目录。Windows 可解压到 `C:\work\one_sided_IPM`，打开其中的 `main.m`；必须保留 `src\+ipm_cr` 及其所有带 `+` 的子目录。输出文件名不使用冒号。Windows 实机编译和运行尚未验证，当前证据边界见[验收记录](docs/VALIDATION.md)。
+
+## 库接口与短程计算
+
+需要直接操作状态或上下文时，在项目根目录执行：
 
 ```matlab
 restoredefaultpath;
@@ -30,7 +49,7 @@ opts = ipm_cr.config();      % 完整数值设置的唯一默认入口
 v = ipm_cr.sample(s,ctx,[0;.3],[0;.1]);
 ```
 
-`step` 返回一个已接受步；它不是推进到指定时间的循环。`tauEnd` 是该步的上限；完整轨道交给 `ipm_cr.run`。采样只需要匹配的规范坐标查询 `X/Y`，不要求研究区域掩码。`s.W` 是完整中心化密度，`s.eta` 是实际积分余项，`s.rhs` 保存该接受态的完整 RHS 与诊断，`s.scale` 保存尺度及补偿物理时钟。核心完整规范密度为 `s.scale.densityOrigin+s.W.core`，环带同理，原物理密度再乘 `exp(-s.scale.logC_omega)`，不能将 `eta` 当作完整密度。`ctx` 持有网格、原墙参考、方法与私有固定计划；墙采样映射对外只读，计数经 `ctx.stats()` 读取。
+`step` 返回一个已接受步；它不是推进到指定时间的循环。`tauEnd` 是该步的上限；完整轨道交给 `ipm_cr.run`。采样只需要匹配的规范坐标查询 `X/Y`，不要求研究区域掩码。`s.W` 是完整中心化密度；解析背景路径另有积分余项 `s.eta`，无背景表达式路径没有该字段。`s.rhs` 保存完整 RHS 与诊断，`s.scale` 保存尺度及补偿物理时钟。核心完整规范密度为 `s.scale.densityOrigin+s.W.core`，环带同理，原物理密度再乘 `exp(-s.scale.logC_omega)`。`ctx` 持有网格、原墙参考、方法与私有固定计划；计数经 `ctx.stats()` 读取。
 
 独立椭圆演示不推进含时系统：
 
@@ -42,7 +61,7 @@ assert(diagnostic.accepted);
 
 ## 完整轨道、停止与恢复
 
-用户编辑一份 case，数值方法、运行预算和停止条件分别设置：
+用户编辑一份 case，数值方法、运行预算和停止条件分别设置。下面直接调用高级接口 `ipm_cr.run`；其相对输出路径以当前 MATLAB 工作目录定位，`main(c)` 则以项目根目录定位：
 
 ```matlab
 c = ipm_cr.config('case');
@@ -59,7 +78,7 @@ c.save.label = 'my_tau10';
 
 `wallSeconds` 是本次调用预算，`tauEnd` 是规范时间的绝对目标；`stop.physicalTime` 和默认关闭的 `stop.steady` 提供其他停止条件。稳态只报告完整 F/Q 与连续窗口通过的候选。在输出目录创建 `STOP` 会在接受步边界保存退出。改变源码、初值或方法须使用新目录；`refresh` 不转换跨版本轨道。初值生成、全部控制、状态含义及数据读取见[使用说明](docs/USAGE.md)。
 
-长实验由同一 Python 管理器冻结输入并约束总预算：
+在 macOS/Linux 上，长实验可由 Python 3 管理器冻结输入并约束总预算：
 
 ```sh
 python3 tools/run_explicit_experiment.py start --case examples/case.json
@@ -67,7 +86,7 @@ python3 tools/run_explicit_experiment.py status \
   --output "$PWD/result"
 ```
 
-管理器冻结 `src`、所需工具、选项和初始输入，并核对相对路径的源码身份。单线程串行运行，限制 RSS、可用内存、磁盘和总时间；MATLAB 段成本与监督进程总成本分别记录。`resume` 沿用原任务的绝对截止时间；额外预算必须独立记录，不能自动延长原账本。MATLAB 路径按本机设置，部分资源监控仅适用 macOS。
+管理器冻结 `src`、所需工具、选项和初始输入，并核对相对路径的源码身份。单线程串行运行，限制 RSS、可用内存、磁盘和总时间；MATLAB 段成本与监督进程总成本分别记录。`resume` 沿用原任务的绝对截止时间；额外预算必须独立记录，不能自动延长原账本。该 Python 监督器和验证启动器目前面向 macOS/Linux，不宣称 Windows 可用；Windows 直接使用 MATLAB 入口。
 
 ## 输出与验证
 
@@ -85,7 +104,7 @@ python3 tools/run_explicit_experiment.py status \
 
 测试从 `tests` 运行，输出写入新的独立目录。原生构建入口在 `tools`，演示与只读绘图在 `examples`；不再把整套求解器放入测试目录。
 
-维护测试只在 [tools/validation.json](tools/validation.json) 登记一份清单：
+维护测试只在 [tools/validation.json](tools/validation.json) 登记一份清单。以下 Python 命令用于 macOS/Linux；MATLAB 测试函数位于 `tests`：
 
 ```sh
 python3 tools/run_validation.py --list

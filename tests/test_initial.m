@@ -7,14 +7,20 @@ if nargin<1||isempty(outputDir)
     outputDir=fullfile(root,'results',['initial_',char(java.util.UUID.randomUUID())]);
 end
 outputDir=char(outputDir);
-assert(startsWith(outputDir,filesep),'ipm_cr:InitialTestOutput','Use an absolute output directory.');
+assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:InitialTestOutput','Use an absolute output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'initial.json')),'ipm_cr:InitialTestFresh','Choose a fresh test output directory.');
 timer=tic;source=ipm_cr.io.identity('source');base=ipm_cr.problem();
 defaultIdentity=ipm_cr.io.identity('authority');
 assert(isequaln(defaultIdentity,ipm_cr.io.identity('authority',root,'data/initial.json')), ...
     'ipm_cr:InitialTestDefault','Default and explicit original manifests must select the same identity.');
-name=['test_',char(java.util.UUID.randomUUID())];
+reserved={'CON','con','PrN','AUX','nul'};
+for k=1:9,reserved=[reserved,{sprintf('COM%d',k),sprintf('lpt%d',k)}];end %#ok<AGROW>
+for k=1:numel(reserved)
+    expect(@()make_initial(reserved{k}),'ipm_cr:InitialName');
+end
+% A device name followed by an allowed suffix is a legal portable case.
+name=['con_',char(java.util.UUID.randomUUID())];
 parameters=struct('amplitude',.63,'centerX',.1,'widthX',.85,'widthY',.9,'skewWeight',.25);
 [initial,generated]=make_initial(name,parameters);cfg=ipm_cr.problem(initial);
 customIdentity=ipm_cr.io.identity('authority',root,initial);
@@ -100,6 +106,7 @@ report=struct('kind','Gaussian_initial_authority_release_contract_v1','passed',t
     'initial',initial,'authority',customIdentity,'originalAuthority',defaultIdentity, ...
     'references',refs,'fixedMeasurementAxes',true,'newProblemIdentity',true, ...
     'manifestAndMatSHABound',true,'identityPortable',true,'overwriteRejected',true, ...
+    'windowsDeviceNamesRejected',true,'reservedPrefixWithSuffixAccepted',true, ...
     'escapedPathsRejected',true,'lateFrameRejected',true,'parameterMismatchRejected',true, ...
     'oldCheckpointAuthorityRejected',true,'defaultBackgroundMatchesSelectedGaussian',true, ...
     'initializationIntegrationNotRun',true,'nativeRequired',false, ...

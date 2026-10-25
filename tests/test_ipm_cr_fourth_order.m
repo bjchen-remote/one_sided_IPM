@@ -12,7 +12,7 @@ if nargin<1||isempty(outputDir)
     outputDir=fullfile(root,'results','fourth_order');
 end
 o=resolve(options);outputDir=char(outputDir);
-assert(startsWith(outputDir,filesep),'ipm_cr:FourthOutput','Use an absolute output directory.');
+assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:FourthOutput','Use an absolute output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'fourth_order.json')), ...
     'ipm_cr:FourthPreserve','Choose a fresh output directory.');

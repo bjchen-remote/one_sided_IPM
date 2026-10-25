@@ -13,7 +13,7 @@ if nargin<1||isempty(outputDir)
     outputDir=fullfile(root,'results','gauge_acceleration');
 end
 o=resolve(options);outputDir=char(outputDir);
-assert(startsWith(outputDir,filesep),'ipm_cr:GaugeTestOutput','Use an absolute output directory.');
+assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:GaugeTestOutput','Use an absolute output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'gauge_acceleration.json')), ...
     'ipm_cr:GaugeTestPreserve','Choose a fresh output directory.');
@@ -95,7 +95,7 @@ assert(isstruct(o.explicitOptions)&&isscalar(o.explicitOptions),'ipm_cr:GaugeTes
 assert(ischar(o.checkpointFolder)||(isstring(o.checkpointFolder)&&isscalar(o.checkpointFolder)), ...
     'ipm_cr:GaugeTestOptions','checkpointFolder must be an explicit path.');
 o.checkpointFolder=char(o.checkpointFolder);
-assert(isempty(o.checkpointFolder)||startsWith(o.checkpointFolder,filesep), ...
+assert(isempty(o.checkpointFolder)||java.io.File(o.checkpointFolder).isAbsolute(), ...
     'ipm_cr:GaugeTestOptions','Use an absolute checkpointFolder.');
 end
 
@@ -282,7 +282,7 @@ values=reshape(map.core*field.core(:)+map.polar*field.polar(:),map.shape);
 end
 
 function [cp,pointer]=load_endpoint(folder)
-assert(startsWith(folder,filesep),'ipm_cr:GaugeTestCheckpoint','Use an absolute checkpoint folder.');
+assert(java.io.File(folder).isAbsolute(),'ipm_cr:GaugeTestCheckpoint','Use an absolute checkpoint folder.');
 recorded=jsondecode(fileread(fullfile(folder,'latest.json')));
 if strcmp(recorded.kind,'ipm_cr_explicit_accepted_pointer_v1')
     [cp,pointer]=ipm_cr.io.checkpoint('import',folder);

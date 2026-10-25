@@ -14,7 +14,7 @@ assert(isstruct(o.radialRedistribution)&&isscalar(o.radialRedistribution)&&o.rad
     o.radialRedistribution.preserveRadius==4&&o.radialRedistribution.fullRefinementRadius==20, ...
     'ipm_cr:RedistributionTestContract','This acceptance test retains r<=4 and tests the transition to full refinement at r=20.');
 if nargin<1||isempty(outputDir),outputDir=fullfile(root,'results','radial_redistribution');end
-outputDir=char(outputDir);assert(startsWith(outputDir,filesep),'ipm_cr:RedistributionTestOutput','Use an absolute output folder.');
+outputDir=char(outputDir);assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:RedistributionTestOutput','Use an absolute output folder.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'radial_redistribution.json')),'ipm_cr:RedistributionTestFresh','Use a fresh result folder.');
 timer=tic;report=struct('kind','static_prefix_preserving_radial_redistribution_v1','status','initializing', ...

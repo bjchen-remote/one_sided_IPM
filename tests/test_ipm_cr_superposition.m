@@ -13,7 +13,7 @@ if nargin<1||isempty(outputDir)
     outputDir=fullfile(root,'results',['superposition_',token]);
 end
 outputDir=char(outputDir);
-assert(startsWith(outputDir,filesep),'ipm_cr:SuperpositionOutput','Use an absolute output directory.');
+assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:SuperpositionOutput','Use an absolute output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'superposition.json')), ...
     'ipm_cr:SuperpositionPreserve','Choose a fresh test output directory.');

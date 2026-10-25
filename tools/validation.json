@@ -8,7 +8,7 @@
   },
   "suites": {
     "quick": ["config", "initial", "steady", "arch", "runtime", "native"],
-    "components": ["release", "step", "elliptic", "connection", "background", "superposition", "tail", "gauge", "radial"],
+    "components": ["main", "release", "step", "elliptic", "connection", "background", "superposition", "tail", "gauge", "radial"],
     "full": ["@quick", "@components"],
     "elliptic": ["elliptic"],
     "runtime": ["runtime"],
@@ -22,6 +22,7 @@
     {"id":"arch","group":"quick","function":"test_arch","call":"output","options":{},"requiresNative":true,"timeoutSeconds":120,"success":"r.passed","meaning":"Public state, context, reference identity and read-only sampling assertions."},
     {"id":"runtime","group":"quick","function":"test_runtime","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Short restart, portable identities, accepted-pointer transactions and read-only legacy imports."},
     {"id":"native","group":"quick","function":"test_ipm_cr_native","call":"output_options","options":{},"requiresNative":true,"timeoutSeconds":120,"success":"r.passed","meaning":"Local polynomial, constant, reconstruction, velocity-Jacobian and CFL checks; not global accuracy."},
+    {"id":"main","group":"components","function":"test_main","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Short expression-initialized main entrypoint from a foreign cwd, project-relative Unicode output, immutable native input and I/P/C, restart, all-stage CFL, and accepted data/UTF-8 summary identity; no trajectory accuracy qualification."},
     {"id":"release","group":"components","function":"test_release","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Short native run, exact zero initial residual, accepted-state stops, resumable stopping state and SHA-bound native field export; no steady-state qualification."},
     {"id":"step","group":"components","function":"test_step_api","call":"output_options","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed&&r.requestedChecksSatisfied&&r.sourceUnchanged","meaning":"Current explicit time policies, mandatory prepared context and rejection paths; historical frozen trajectories are explicitly skipped."},
     {"id":"elliptic","group":"components","function":"test_ipm_cr","call":"output_options","options":{"includeIsolatedRefinement":true},"requiresNative":false,"timeoutSeconds":180,"success":"r.passed","meaning":"Independent exact-source, streamfunction and velocity manufactures, including isolated patch refinements."},
