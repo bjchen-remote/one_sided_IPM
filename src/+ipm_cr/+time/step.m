@@ -1,6 +1,7 @@
-function [out,info]=step(state,g,wallOps,options,finalTau,ctx)
+function [out,info]=step(state,ctx,finalTau,controls)
 %STEP Transactional complete-RHS explicit RK4, with legacy SSPRK3 also available.
-% OPTIONS.timeIntegrator is 'rk4' (default) or 'ssprk3'. Every stage and
+% CONTROLS contains only cfl, maxDt, minDt and timeIntegrator overrides.
+% Missing controls inherit the prepared context's time policy. Every stage and
 % fresh endpoint use the complete W -> q -> Poisson -> I/P/C -> WENO RHS.
 % The identical accepted initial RHS is reused, then the fresh endpoint is
 % retained for the next step. All stages AND the endpoint obey the CFL.
@@ -13,22 +14,31 @@ function [out,info]=step(state,g,wallOps,options,finalTau,ctx)
 % Event probes use the same complete explicit tableau from the accepted
 % initial state; the original peak functional is never altered or projected.
 timer=tic;
-key=ipm_cr.internal.key(g,wallOps,options);
+assert(nargin>=3&&isa(ctx,'ipm_cr.context'),'ipm_cr:StateContext', ...
+    'Use the prepared context that owns the accepted state.');
+g=ctx.mesh;wallOps=ctx.wall;
+key=ipm_cr.internal.key(g,wallOps,ctx.opts,ctx.identity);
 assert(isfield(state,'ctxKey')&&isequaln(state.ctxKey,key), ...
     'ipm_cr:StateContext','The accepted RHS belongs to another geometry or method. Reinitialize or refresh explicitly.');
-if nargin<6||isempty(ctx)
-    ctx=ipm_cr.context(g,wallOps,options);
-    state.ctxId=ctx.id;
-else
-    assert(isfield(state,'ctxId')&&strcmp(state.ctxId,ctx.id)&& ...
-        isequaln(key,ctx.key),'ipm_cr:StateContext', ...
-        'The accepted state and step must use the same run context.');
+assert(isfield(state,'ctxId')&&strcmp(state.ctxId,ctx.id)&& ...
+    isequaln(key,ctx.key),'ipm_cr:StateContext', ...
+    'The accepted state and step must use the same run context.');
+if nargin<4,controls=struct();end
+assert(isstruct(controls)&&isscalar(controls),'ipm_cr:StepOptions','Use scalar time controls.');
+names=fieldnames(controls);allowed={'cfl','maxDt','minDt','timeIntegrator'};
+assert(all(ismember(names,allowed)),'ipm_cr:StepOptions', ...
+    'Only time controls can change on an existing context.');
+policy=struct();
+for k=1:numel(allowed)
+    name=allowed{k};if isfield(ctx.opts,name),policy.(name)=ctx.opts.(name);end
 end
-method='rk4';if isfield(options,'timeIntegrator'),method=char(options.timeIntegrator);end
+for k=1:numel(names),policy.(names{k})=controls.(names{k});end
+controls=policy;
+method='rk4';if isfield(controls,'timeIntegrator'),method=char(controls.timeIntegrator);end
 assert(ismember(method,{'rk4','ssprk3'}),'ipm_cr:ExplicitTimeIntegrator', ...
     'Use rk4 or the explicitly selected legacy ssprk3 method.');
 for name={'cfl','maxDt','minDt'}
-    validateattributes(options.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
+    validateattributes(controls.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
 end
 validateattributes(finalTau,{'numeric'},{'scalar','real','finite'});
 validate_rate(state.rhs.rate);
@@ -39,7 +49,7 @@ assert(all(isfinite(initialZ))&&isfinite(state.scale.physicalTimeLow), ...
 remaining=finalTau-state.scale.canonicalTime;
 assert(remaining>0,'ipm_cr:ExplicitFinalTime','The endpoint must follow the accepted state.');
 % The predictor margin never replaces the binding complete-stage audit.
-dt=min([options.maxDt,.95*options.cfl/max(state.rhs.rate,realmin),remaining]);
+dt=min([controls.maxDt,.95*controls.cfl/max(state.rhs.rate,realmin),remaining]);
 retries=0;rhsEvaluations=0;retryReasons={};
 retryDiagnostics=struct([]);retryCauses={};maximumRetries=12;
 peakDiagnostics=struct([]);
@@ -49,19 +59,19 @@ if isstruct(wallOps)&&isfield(wallOps,'x'),wallKnots=wallOps.x(:);end
 currentStageTau=state.scale.canonicalTime;
 callbacks=struct('stage',@stage,'finish',@finish,'notePeak',@note_peak);
 while true
-    if dt<options.minDt||initial.scale.canonicalTime+dt<=initial.scale.canonicalTime
+    if dt<controls.minDt||initial.scale.canonicalTime+dt<=initial.scale.canonicalTime
         retry_error(MException('ipm_cr:ExplicitMinimumStep', ...
-            'No admissible explicit step remains: dt %.17g, minDt %.17g.',dt,options.minDt));
+            'No admissible explicit step remains: dt %.17g, minDt %.17g.',dt,controls.minDt));
     end
     before=rhsEvaluations;
     currentStageTau=initial.scale.canonicalTime;
     currentPeakProbe=0;peakEvent=empty_peak_event();
     try
-        [trial,records]=ipm_cr.time.trial(initial,dt,method,g,options,callbacks);
+        [trial,records]=ipm_cr.time.trial(initial,dt,method,g,controls,callbacks);
         if strcmp(method,'rk4')&&~isempty(trial)&&inside_cfl(max(records.rates),dt)
             eventCallsBefore=rhsEvaluations;
             [trial,records,dt,peakEvent]=ipm_cr.time.event( ...
-                initial,trial,records,dt,wallKnots,options,@event_probe,peakEvent);
+                initial,trial,records,dt,wallKnots,controls,@event_probe,peakEvent);
             peakEvent.extraRhsEvaluations=rhsEvaluations-eventCallsBefore;
         end
     catch problem
@@ -78,10 +88,10 @@ while true
     if ~isempty(trial)&&inside_cfl(maximumRate,dt)
         out=trial;acceptedAttemptRhsEvaluations=rhsEvaluations-before;break;
     end
-    nextDt=min(.95*dt,.95*options.cfl/maximumRate);
+    nextDt=min(.95*dt,.95*controls.cfl/maximumRate);
     problem=MException('ipm_cr:ExplicitStageCfl', ...
         'Complete stage CFL %.17g exceeds configured bound %.17g at dt %.17g (maximum rate %.17g).', ...
-        dt*maximumRate,options.cfl,dt,maximumRate);
+        dt*maximumRate,controls.cfl,dt,maximumRate);
     note_retry(problem,dt,nextDt,rhsEvaluations-before);
     if retries>=maximumRetries,retry_error(problem);end
     retryReasons{end+1}=problem.identifier; %#ok<AGROW>
@@ -93,7 +103,7 @@ else,order=3;stages=3;label='ssprk3_full_hybrid_cfl_v1';end
 info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
     'spatialOrderCertified',false,'dt',dt,'seconds',toc(timer), ...
     'rate',initial.rhs.rate,'maximumStageRate',maximumRate, ...
-    'realizedMaximumStageCfl',dt*maximumRate,'configuredCfl',options.cfl, ...
+    'realizedMaximumStageCfl',dt*maximumRate,'configuredCfl',controls.cfl, ...
     'retries',retries,'retryReasons',{retryReasons},'retryDiagnostics',retryDiagnostics, ...
     'maximumStepRetries',maximumRetries,'explicitCflLimitApplied',true, ...
     'cflPosition',out.rhs.cflPosition, ...
@@ -151,13 +161,13 @@ info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
             'A complete accepted state must remain finite and centered.');
     end
     function yes=inside_cfl(rate,h)
-        yes=h*rate<=options.cfl*(1+64*eps);
+        yes=h*rate<=controls.cfl*(1+64*eps);
     end
     function [probedState,probedRecords]=event_probe(h,probeIndex)
         savedDt=dt;savedProbe=currentPeakProbe;
         dt=h;currentPeakProbe=probeIndex;
         try
-            [probedState,probedRecords]=ipm_cr.time.trial(initial,h,'rk4',g,options,callbacks);
+            [probedState,probedRecords]=ipm_cr.time.trial(initial,h,'rk4',g,controls,callbacks);
         catch problem
             dt=savedDt;currentPeakProbe=savedProbe;rethrow(problem);
         end

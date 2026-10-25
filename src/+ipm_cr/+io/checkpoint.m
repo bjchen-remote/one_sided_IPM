@@ -38,7 +38,9 @@ else
 end
 assert(isequaln(cp.sourceInventory,ipm_cr.io.identity('source')), ...
     'ipm_cr:CheckpointSourceChanged','Source changed before an accepted commit.');
-assert(isequaln(cp.authority,ipm_cr.io.identity('authority')), ...
+initial='data/initial.json';
+if isfield(cp,'explicitOptions')&&isfield(cp.explicitOptions,'initial'),initial=cp.explicitOptions.initial;end
+assert(isequaln(cp.authority,ipm_cr.io.identity('authority',[],initial)), ...
     'ipm_cr:CheckpointAuthorityChanged','Initial authority changed before an accepted commit.');
 cp.kind='ipm_cr_accepted_checkpoint_v2';cp.schemaVersion=2;
 cp.stateRepresentation='W_centered_density_eta_analytic_residual';

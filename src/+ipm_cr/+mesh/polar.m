@@ -2,14 +2,13 @@ function grid = polar(options)
 %POLAR_GRID Independent stretched polar tensor geometry on a half disk.
 % Arrays have size [nr,ntheta].  The repeated r=0 row denotes ONE point.
 % options: nr=129, ntheta=129, rmax=1e10, firstSpacing=.02,
-% domain='semicircle', radialMap='sinh', stencilWidth=7, originRings=4,
-% originFitDegree=4. radialMap='uniform_core' adds a nearly uniform core.
+% domain='semicircle', radialMap='sinh', stencilWidth=7.
+% radialMap='uniform_core' adds a nearly uniform core.
 % The default r(s)=R*sinh(alpha*s)/sinh(alpha) has a smooth ODD continuation
 % across the signed physical wall.  Explicit radialMap='exp_gaps' retains
 % the old increasing-gap geometry for historical diagnostic comparisons.
 % This constructor returns axes, coordinates and the radial map metric;
 % it does not build origin jets or transport derivative operators.
-% originRings/originFitDegree remain validated for legacy option structs.
 % No rectangle is replaced by a half disk silently.
 % Requires the original ipm_cr.mesh.fd on the MATLAB search path.
 if nargin<1,options=struct();end
@@ -26,9 +25,9 @@ rmax=option(options,'rmax',1e10);firstSpacing=option(options,'firstSpacing',.02)
 radialMap=char(option(options,'radialMap','sinh'));
 assert(ismember(radialMap,{'sinh','exp_gaps','uniform_core'}),'polar:RadialMap', ...
     'radialMap must be sinh, uniform_core, or the explicit historical exp_gaps option.');
-width=option(options,'stencilWidth',7);originRings=option(options,'originRings',4);
-originFitDegree=option(options,'originFitDegree',4);
-assert(ismember(originFitDegree,[4,6]),'polar:OriginFitDegree','The origin fit supports total degree four or six.');
+width=option(options,'stencilWidth',7);
+assert(~any(isfield(options,{'originRings','originFitDegree'})), ...
+    'ipm_cr:RetiredOption','originRings/originFitDegree no longer affect this origin-free solver.');
 validateattributes(nr,{'numeric'},{'scalar','real','finite','integer','>=',7});
 validateattributes(ntheta,{'numeric'},{'scalar','real','finite','integer','>=',7});
 validateattributes(rmax,{'numeric'},{'scalar','real','finite','positive'});
@@ -36,8 +35,6 @@ validateattributes(firstSpacing,{'numeric'},{'scalar','real','finite','positive'
 validateattributes(width,{'numeric'},{'scalar','real','finite','integer','>=',3});
 assert(width<=min(nr,ntheta),'polar:StencilWidth', ...
     'The derivative stencil must fit both tensor axes.');
-validateattributes(originRings,{'numeric'}, ...
-    {'scalar','real','finite','integer','>=',4,'<=',nr-1});
 intervals=nr-1;
 assert(log(firstSpacing)+log(intervals)<=log(rmax)+32*eps(max(1,abs(log(rmax)))), ...
     'polar:RadialSpacing','firstSpacing must not exceed the average radial spacing.');

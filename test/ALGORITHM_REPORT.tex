@@ -842,7 +842,7 @@ o = struct('outputDir',fullfile(pwd,'output/my_tau10'), ...
 单步交互使用 \code{[s,ctx]=ipm_cr.init(opts)} 和
 \code{[s,info]=ipm_cr.step(s,ctx,tauEnd)}；后者只返回一个接受步，
 \code{tauEnd} 是上限，不是完整时间循环。
-通用物理查询为 \code{ipm_cr.sample(s,ctx,x,y)}，无需研究区域掩码。
+规范坐标查询为 \code{ipm_cr.sample(s,ctx,X,Y)}，无需研究区域掩码。
 \code{ipm_cr.rhs(s,ctx)} 返回完整求值，
 \code{ipm_cr.refresh(s,ctx)} 只在相同数学身份下冷重建 RHS。
 可迁移冻结副本使用相对路径的源身份；
@@ -878,4 +878,27 @@ checkpoint 指针只记录槽文件名，私有计划恢复时重建。
 \end{itemize}
 报告中的局部一致性、离散系统验收、有限查询轨道自收敛和计算性能
 分别保留其测量对象；任一项都不替代其他项。
+\subsection{发布配置与科学数据接口}
+\code{ipm_cr.config('case')} 生成
+\code{initial/domain/method/run/stop/save} 六块配置。
+规范时间终点、物理时间阈值与本次墙钟预算分别记录；
+默认输出为 \code{result}，共同外半径为 $10^{10}$。
+仅规范时间终点直接限制 RK 步；其他停止在完整接受态检查并记录真实终点。
+
+初值选择绑定项目相对 manifest 和 MAT 的 SHA。
+Gaussian 参数改变时，由 \code{make_initial} 创建新的原墙测量 authority
+并重新确定该问题的 I/P/C；背景分解本身不改变物理初值。
+默认匹配背景保持初始余项严格为零。
+
+可选稳态观测检查近场、主体和全部活动节点的完整 $F,Q$，
+并要求非重叠时间窗口内完整场、速度及规范速率变化满足指定条件。
+重叠副本均保留，不作平移、振幅拟合或远场裁剪。
+候选仅表示已登记观测条件满足，不新增连续误差或网格收敛资格。
+
+科学数据包保存原生坐标、活动与 ghost 标记、完整场、余项、尺度、
+补偿物理时钟及源码、初值和配置身份；不保存求解器句柄或 LU。
+可靠恢复仍从双槽接受检查点进行。
+测试入口由 \code{tools/validation.json} 单独登记；
+缺失的外部历史比较明确标为跳过。
+本节描述发布接口，不将先前冻结实验的精度结论转移给新源码。
 \end{document}

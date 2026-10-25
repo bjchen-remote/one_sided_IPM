@@ -9,6 +9,7 @@ classdef context < handle
         key
         wallR
         wallMap
+        identity
     end
     properties (Access=private)
         pmap
@@ -17,13 +18,20 @@ classdef context < handle
     methods
         function obj=context(g,wall,opts)
             % Build every candidate before publishing the prepared context.
+            initial='data/initial.json';if isfield(opts,'initial'),initial=opts.initial;end
+            provenance=struct('source',ipm_cr.io.identity('source'), ...
+                'authority',ipm_cr.io.identity('authority',ipm_cr.root(),initial));
             plan=ipm_cr.poisson.plan(g,opts.solverOptions);
             r=unique([0;abs(wall.x(:))]);X=[r,-r];Y=zeros(size(X));
             empty=struct('core',zeros(size(g.core.X)),'polar',zeros(size(g.polar.X)));
             [~,map]=ipm_cr.mesh.sample(empty,g,X,Y);
             assert(map.allValid,'ipm_cr:WallCoverage','Every original wall point needs an active owner.');
             obj.mesh=g;obj.wall=wall;obj.opts=opts;
-            obj.key=ipm_cr.internal.key(g,wall,opts);obj.id=tempname;
+            assert(isequaln(provenance.source,ipm_cr.io.identity('source'))&& ...
+                isequaln(provenance.authority,ipm_cr.io.identity('authority',ipm_cr.root(),initial)), ...
+                'ipm_cr:ContextIdentity','Source or initial datum changed while preparing the context.');
+            obj.identity=provenance;
+            obj.key=ipm_cr.internal.key(g,wall,opts,provenance);obj.id=tempname;
             obj.pmap=plan;obj.wallR=r;obj.wallMap=map;
         end
         function [flow,info]=velocity(obj,source,analyticSource,includePsi)

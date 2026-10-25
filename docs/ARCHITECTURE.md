@@ -33,7 +33,7 @@ v = ipm_cr.sample(s,ctx,x,y);
 [summary,s,ctx] = ipm_cr.run(runOptions);
 ```
 
-`init` 直接构造状态，`rhs` 直接组装本阶段背景与完整 RHS；没有第二套初始化或 RHS 分发入口。`step` 只返回一个接受步，`tauEnd` 是该步上限；完整时间循环由 `run` 管理。`rhs` 返回当前状态的完整求值，可用第二输出 `[eval,W]` 取得同步、重建后的完整中心化密度。`refresh` 在同一数学身份下调用它重建接受态 RHS；两者都不跨版本转换轨道。`sample` 接受匹配的物理查询数组，不要求区域掩码。区域比较、采样范数和研究云在 `diag.compare`，不侵入通用采样。
+`init` 直接构造状态，`rhs` 直接组装本阶段背景与完整 RHS；没有第二套初始化或 RHS 分发入口。`step` 只返回一个接受步，`tauEnd` 是该步上限；完整时间循环由 `run` 管理。`rhs` 返回当前状态的完整求值，可用第二输出 `[eval,W]` 取得同步、重建后的完整中心化密度。`refresh` 在同一数学身份下调用它重建接受态 RHS；两者都不跨版本转换轨道。`sample` 接受匹配的规范坐标查询数组，不要求区域掩码。区域比较、采样范数和研究云在 `diag.compare`，不侵入通用采样。
 
 初始化、RK 阶段、诊断、history 和 v2 checkpoint 全程使用同一套 `W/eta/rhs` 字段；不再往返转换 `rho/residual/flow`。旧 v1 数据的命名转换仅在 `io.checkpoint('import',folder)` 这一只读边界发生；`'legacy'` 仍返回未经修改的历史 payload。导入不改写历史文件，也不授权新源码继续旧轨道。
 
@@ -43,7 +43,7 @@ v = ipm_cr.sample(s,ctx,x,y);
 
 `model.reference(cfg)` 直接读取已核 SHA 的原始 t0 frame，返回原墙算子、初始尺度、I/P/C 参考和规范初猜。原墙节点来自该 frame，原 `Dx`、密度/墙源一致性和 t0 时钟均重新核验；建立参考不构造输运网格，也不建立旧 Cartesian/polar 状态载体。
 
-`context` 是每次模拟独立的 handle，公开 `mesh/wall/opts/key/id` 只读；固定 Poisson 计划和 `psolver` 句柄由它私有持有；墙采样 `wallR/wallMap` 对外只读，统计经 `ctx.stats()` 读取。不把每个局部函数改成类，不持有跨状态密度/源/规范观测；数组仍以 struct 和数值矩阵传递。模型、时间步与诊断只能使用匹配身份的状态和上下文。
+`context` 是每次模拟独立的 handle，公开 `mesh/wall/opts/key/id/identity` 只读；固定 Poisson 计划和 `psolver` 句柄由它私有持有；墙采样 `wallR/wallMap` 对外只读，统计经 `ctx.stats()` 读取。不把每个局部函数改成类，不持有跨状态密度/源/规范观测；数组仍以 struct 和数值矩阵传递。模型、时间步与诊断只能使用匹配身份的状态和上下文。
 
 `tools/run_explicit_experiment.py` 和 `tools/run_validation.py` 通过 `tools/common.py` 统一冻结/校验规则；`tools/build_ipm_cr_native.m` 从源码构建 MEX。`tests` 只存验证与研究适配，`examples/poisson_demo.m` 是独立椭圆演示，不推进含时系统。
 
@@ -187,3 +187,16 @@ Python 管理器冻结当前 `src`、工具、选项、`data/initial.json` 和�
 这些官方资料支持职责分离与生命周期原则；本项目的包名、context 接口和文件组合是针对 MATLAB 双网格方法的工程选择，不是上述框架规定的实现。此处不引入框架依赖；RK4 算术、CFL、原峰泛函和真实子步事件定位由本项目的数值契约决定。
 
 `io.checkpoint('save',...)` 由持有运行目录 owner 锁的单一写者调用，写前核对传入的上一代指针与磁盘一致；过期游标会在覆盖任何槽之前被拒绝。正常 `run` 自动管理该锁和指针链。
+
+
+## 发布配置与数据边界（2026-10-24）
+
+`config()` 保留完整方法接口；`config('case')` 返回唯一用户 case 模板，含 initial/domain/method/run/stop/save，`config(case,'run')` 统一解析后供生产 runner 使用。旧 mesh/poisson 和 explicitOptions 仅在此边界归一化，重复输入拒绝；run 不再维护另一份默认值或别名逻辑。唯一默认解析背景来自选中 manifest 的 Gaussian 参数，init 复用它判断严格零 eta 初态。
+
+`problem(initial)` 和 `io.identity('authority',root,initial)` 绑定项目相对 manifest 与 MAT 的 SHA。`make_initial` 为 Gaussian 参数族生成新的固定测量轴 authority 和 I/P/C。context 在准备前后核验源码及初值身份，将该身份纳入只读 key；pack 必须核对创建时身份，不能用导出时的输入把旧状态重新命名。
+
+内部时间步仅为 `time.step(state,ctx,finalTau,controls)`；controls 限四项时间策略。几何、原墙和完整方法由 ctx 提供，不存在缺失 ctx 时临时重建的维护分支。数值 RK、峰事件、全阶段 CFL 及 Poisson 直接回退不变。
+
+`diag.steady` 是可选的接受态观测，默认关闭；完整原生活动节点和全部重叠副本的 F/Q、固定网格全场/速率窗口变化共同生成候选。tracker、原生 anchor、最后观测和计数随 checkpoint 保存；策略改变明确重新累计，恢复候选不得额外推进。它不属于 RHS，也不参与阶段演化。
+
+`pack` 在新的 data 子目录保存不含求解器句柄的原生科学包、方法/初值/源码身份、真实坐标/active/ghost、完整场与尺度时钟。论文重采样独立于原生 checkpoint 和误差验证。使用细节见 USAGE；测试清单唯一来源为 tools/validation.json。

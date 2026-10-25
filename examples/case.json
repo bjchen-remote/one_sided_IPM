@@ -1,0 +1,19 @@
+{
+  "format": "ipm_cr_case_v1",
+  "initial": "data/initial.json",
+  "domain": {"rmax": 10000000000},
+  "method": {
+    "geometry": {
+      "coreSpacing": 0.03,
+      "grid": {"nr": 385, "ntheta": 129, "firstSpacing": 0.03},
+      "radialRedistribution": {"enabled": true, "factor": 2, "preserveRadius": 4, "fullRefinementRadius": 20}
+    },
+    "solverOptions": {"coreDegree": [64, 64], "angularDegree": 80, "polarDegree": 20, "requireAccuracy": true},
+    "timeIntegrator": "rk4",
+    "cfl": 0.3,
+    "maxDt": 0.2
+  },
+  "run": {"outputDir": "result", "tauEnd": 10, "wallSeconds": 600},
+  "stop": {"physicalTime": [], "steady": {"enabled": false}},
+  "save": {"data": true, "history": true, "label": "example_tau10"}
+}

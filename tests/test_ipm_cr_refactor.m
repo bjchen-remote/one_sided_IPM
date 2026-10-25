@@ -35,6 +35,7 @@ try
     data=load(baselineMat,'baseline');
     assert(isfield(data,'baseline'),'ipm_cr:RefactorBaseline','The MAT file must contain baseline.');
     baseline=data.baseline;
+    report.methodSchemaCompatibility='Old method metadata is resolved by current config to add its default initial selector; frozen numeric snapshots and error comparisons remain unchanged.';
     assert(isstruct(baseline)&&isscalar(baseline)&& ...
         all(isfield(baseline,{'cases','queryCloud','tauEnd','baselineRuntime','authoritySHA'}))&& ...
         numel(baseline.cases)==2,'ipm_cr:RefactorBaseline','Use the complete two-case frozen baseline.');
@@ -54,7 +55,10 @@ try
             'finalSnapshotIdentical',false,'finalSampleIdentical',false, ...
             'finalDiagnosticIdentical',false,'constantDerivative',struct(), ...
             'stepsAdvanced',0,'maximumStageCfl',0,'retries',0,'seconds',0,'passed',false);
-        require_bitwise(method,reference.method,[label,'.method']);row.methodIdentical=true;
+        % Resolve the old method's missing default initial selector without
+        % changing the frozen fixture or any independent numeric snapshot.
+        expectedMethod=ipm_cr.config(reference.method);
+        require_bitwise(method,expectedMethod,[label,'.method']);row.methodIdentical=true;
         require_bitwise(g.geometryKey,reference.geometryKey,[label,'.geometryKey']);row.geometryKeyIdentical=true;
         require_bitwise(wall,reference.wallOps,[label,'.wallOps']);row.wallOpsIdentical=true;
         require_bitwise(authoritySHA,reference.authoritySHA,[label,'.authoritySHA']);row.authorityIdentical=true;
@@ -64,7 +68,7 @@ try
         require_bitwise(diagnostic,reference.initialDiagnostic,[label,'.initialDiagnostic']);row.initialDiagnosticIdentical=true;
         row.constantDerivative=constant_check(g);
         while state.scale.canonicalTime<baseline.tauEnd
-            [state,step]=ipm_cr.time.step(state,g,wall,method,baseline.tauEnd,ctx);
+            [state,step]=ipm_cr.time.step(state,ctx,baseline.tauEnd);
             assert(strcmp(step.timeIntegrator,'rk4')&& ...
                 step.realizedMaximumStageCfl<=method.cfl*(1+128*eps), ...
                 'ipm_cr:RefactorCfl','The regression must retain complete-stage explicit RK4 CFL enforcement.');

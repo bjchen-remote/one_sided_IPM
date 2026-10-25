@@ -218,7 +218,8 @@ if checkpointed&&wallBudget>0
 end
 while state.scale.canonicalTime<T
     if toc(timer)>=wallBudget,break;end
-    [state,info]=ipm_cr.time.step(state,g,wall,method,T,ctx);
+    [state,info]=ipm_cr.time.step(state,ctx,T, ...
+        struct('cfl',method.cfl,'maxDt',method.maxDt,'minDt',method.minDt,'timeIntegrator',method.timeIntegrator));
     assert(strcmp(info.timeIntegrator,'rk4'),'ipm_cr:IVPMethod');
     maximumCfl=max(maximumCfl,info.realizedMaximumStageCfl);
     maximumGauge=max(maximumGauge,info.maximumStageGaugeResidual);count=count+1;

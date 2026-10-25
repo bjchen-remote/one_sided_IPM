@@ -1,13 +1,12 @@
 function [summary,state,ctx]=run(overrides)
 %RUN Accepted-only, resumable explicit hybrid trajectory using the public API.
-% Options: outputDir, tauEnd=200, wallSeconds=600, checkpointEveryTau=1,
-% checkpointWallSeconds=60, logEveryTau=1, maxSteps=2e6, resume=true,
-% verbose=true, rethrowOnFailure=true, and explicitOptions. The initialize
-% settings geometry/solverOptions/transport/cfl/maxDt/minDt/timeIntegrator/background are also accepted
-% directly. Only complete accepted states may replace the durable pointer.
+% Use config('case') or a JSON case filename. Legacy flat inputs are resolved
+% only by config. Stops occur at accepted endpoints; tauEnd is an exact cap,
+% while physical-time thresholds report any accepted-step overshoot.
 if nargin<1,overrides=struct();end
+if ischar(overrides)||isstring(overrides),overrides=jsondecode(fileread(overrides));end
 root=ipm_cr.io.identity('root');
-[opts,requested]=settings(overrides,root);folder=opts.outputDir;
+[opts,resolved,requested]=ipm_cr.config(overrides,'run');folder=opts.outputDir;
 if ~isfolder(folder),mkdir(folder);end
 file=java.io.RandomAccessFile(fullfile(folder,'owner.lock'),'rw');channel=file.getChannel();lock=channel.tryLock();
 assert(~isempty(lock),'ipm_cr:ExplicitRunnerOwner','This output folder already has a live owner.');
@@ -16,12 +15,13 @@ logfid=fopen(fullfile(folder,'run.log'),'a');assert(logfid>=0,'ipm_cr:ExplicitRu
 logCleanup=onCleanup(@()fclose(logfid)); %#ok<NASGU>
 threads=maxNumCompThreads(1);threadCleanup=onCleanup(@()maxNumCompThreads(threads)); %#ok<NASGU>
 timer=tic;state=[];ctx=[];g=[];wallOps=[];method=[];pointer=[];priorWall=0;
-auditHistory=struct([]);
+auditHistory=struct([]);stopState=[];stopRecords=struct([]);stopDirty=false;
 historyColumns=ipm_cr.io.history('columns');history=zeros(0,numel(historyColumns));
 manifest=struct([]);authority=struct();
 summary=struct('kind','ipm_cr_run_v2','status','initializing', ...
     'outputDir',folder,'targetTau',opts.tauEnd,'startedUtc',ipm_cr.io.identity('utc'), ...
     'timeIntegrator','rk4','explicitCflLimitApplied',true,'threads',1, ...
+    'runControls',opts,'steadyStateCertified',false,'steadyCandidate',false, ...
     'matlabVersion',version,'computer',computer,'sourceInventory',manifest, ...
     'authority',authority,'trajectoryAccuracyCertified',false, ...
     'gaugeResidualHistoryScope','Maximum over all complete RK stages and accepted endpoint, with initial endpoint included.', ...
@@ -29,18 +29,26 @@ summary=struct('kind','ipm_cr_run_v2','status','initializing', ...
     'strongResidualScope','Native-array source reconstruction has no independent off-grid strong PDE audit unless the returned solver explicitly supplies one.');
 logline('START targetTau=%.17g wallSeconds=%.3f folder=%s',opts.tauEnd,opts.wallSeconds,folder);
 try
-    manifest=ipm_cr.io.identity('source');authority=ipm_cr.io.identity('authority');
-    summary.sourceInventory=manifest;summary.authority=authority;
+    manifest=ipm_cr.io.identity('source');summary.sourceInventory=manifest;
     cursor=fullfile(folder,'latest.json');
     if isfile(cursor)
         assert(opts.resume,'ipm_cr:ExplicitRunnerResume','Existing accepted data require resume=true or a new output directory.');
         [checkpoint,pointer]=ipm_cr.io.checkpoint('load',folder);
         assert(isequaln(checkpoint.sourceInventory,manifest), ...
             'ipm_cr:ExplicitRunnerSourceChanged','A recorded source changed; use a new run for a changed implementation.');
+        method=checkpoint.explicitOptions;
+        authority=ipm_cr.io.identity('authority',root,method.initial);
         assert(isequaln(checkpoint.authority,authority), ...
             'ipm_cr:ExplicitRunnerAuthorityChanged','The original immutable datum authority changed.');
         state=checkpoint.state;g=checkpoint.geometry;wallOps=checkpoint.wallOps;
-        method=checkpoint.explicitOptions;history=checkpoint.history;
+        history=checkpoint.history;
+        if isfield(checkpoint,'stopState')&&isfield(checkpoint,'runnerOptions')&& ...
+                isfield(checkpoint.runnerOptions,'stop')&&isequaln(checkpoint.runnerOptions.stop,opts.stop)
+            stopState=checkpoint.stopState;
+            if isfield(checkpoint,'stopRecords'),stopRecords=checkpoint.stopRecords;end
+        elseif isfield(checkpoint,'stopState')&&~isempty(checkpoint.stopState)
+            summary.stopPolicyReset=true;
+        end
         ctx=ipm_cr.context(g,wallOps,method);
         auditHistory=checkpoint.auditHistory;
         assert(isequal(checkpoint.historyColumns,historyColumns), ...
@@ -68,13 +76,16 @@ try
         summary.resumed=true;
         logline('RESUME step=%d tau=%.17g checkpoint=%s',state.step,state.scale.canonicalTime,pointer.sha256);
     else
-        [state,ctx]=ipm_cr.init(requested);g=ctx.mesh;wallOps=ctx.wall;method=ctx.opts;
+        authority=ipm_cr.io.identity('authority',root,resolved.initial);
+        [state,ctx]=ipm_cr.init(resolved);g=ctx.mesh;wallOps=ctx.wall;method=ctx.opts;
         history=ipm_cr.io.history('row',state,struct(),toc(timer));summary.resumed=false;
         [pointer,auditHistory]=commit(folder,state,g,wallOps,method,opts,history,historyColumns, ...
-            manifest,authority,priorWall+toc(timer),pointer,auditHistory);
+            manifest,authority,priorWall+toc(timer),pointer,auditHistory,stopState,stopRecords);
         logline('INITIAL step=0 tau=0 core=%dx%d annulus=%dx%d cfl=%.6g', ...
             g.core.ny,g.core.nx,g.polar.nr,g.polar.ntheta,method.cfl);
     end
+    summary.authority=authority;
+    if opts.stop.steady.enabled,observe_steady();end
     assert(opts.tauEnd>=state.scale.canonicalTime,'ipm_cr:ExplicitRunnerTarget', ...
         'The requested target precedes the accepted checkpoint.');
     startStep=state.step;startTau=state.scale.canonicalTime;
@@ -82,33 +93,61 @@ try
     nextCheckpoint=(floor(state.scale.canonicalTime/opts.checkpointEveryTau)+1)*opts.checkpointEveryTau;
     nextLog=(floor(state.scale.canonicalTime/opts.logEveryTau)+1)*opts.logEveryTau;
     lastCheckpointWall=toc(timer);status='running';
+    nextObservation=(floor(state.scale.canonicalTime/opts.stop.steady.sampleEveryTau)+1)*opts.stop.steady.sampleEveryTau;
     while state.scale.canonicalTime<opts.tauEnd&&state.step<opts.maxSteps
         if toc(timer)>=opts.wallSeconds,status='wall_budget';break;end
         if isfile(fullfile(folder,'STOP')),status='stopped';break;end
+        if ~isempty(opts.stop.physicalTime)&& ...
+                (state.scale.physicalTime-opts.stop.physicalTime)+state.scale.physicalTimeLow>=0
+            status='physical_time';break;
+        end
+        if summary.steadyCandidate,status='steady_candidate';break;end
         [trial,info]=ipm_cr.step(state,ctx,opts.tauEnd);
         assert(info.explicitCflLimitApplied&&info.realizedMaximumStageCfl<=method.cfl*(1+64*eps), ...
             'ipm_cr:ExplicitRunnerCfl','A trial violated the configured complete all-stage explicit CFL.');
         state=trial;history(end+1,:)=ipm_cr.io.history('row',state,info,priorWall+toc(timer)); %#ok<AGROW>
+        if opts.stop.steady.enabled&&state.scale.canonicalTime>=nextObservation
+            observe_steady();
+            nextObservation=(floor(state.scale.canonicalTime/opts.stop.steady.sampleEveryTau)+1)*opts.stop.steady.sampleEveryTau;
+        end
         if state.scale.canonicalTime>=nextCheckpoint||toc(timer)-lastCheckpointWall>=opts.checkpointWallSeconds
             [pointer,auditHistory]=commit(folder,state,g,wallOps,method,opts,history,historyColumns, ...
-                manifest,authority,priorWall+toc(timer),pointer,auditHistory);
+                manifest,authority,priorWall+toc(timer),pointer,auditHistory,stopState,stopRecords);
             nextCheckpoint=(floor(state.scale.canonicalTime/opts.checkpointEveryTau)+1)*opts.checkpointEveryTau;
-            lastCheckpointWall=toc(timer);
+            lastCheckpointWall=toc(timer);stopDirty=false;
         end
         if state.scale.canonicalTime>=nextLog
             log_progress(state,info);
             nextLog=(floor(state.scale.canonicalTime/opts.logEveryTau)+1)*opts.logEveryTau;
         end
     end
+    if opts.stop.steady.enabled,observe_steady();end
     if strcmp(status,'running')
-        if state.scale.canonicalTime>=opts.tauEnd,status='target_reached';else,status='maximum_steps';end
+        if summary.steadyCandidate,status='steady_candidate';
+        elseif state.scale.canonicalTime>=opts.tauEnd,status='target_reached';else,status='maximum_steps';end
     end
-    if isempty(pointer)||pointer.sequence~=state.step
+    if isempty(pointer)||pointer.sequence~=state.step||stopDirty
         [pointer,auditHistory]=commit(folder,state,g,wallOps,method,opts,history,historyColumns, ...
-            manifest,authority,priorWall+toc(timer),pointer,auditHistory);
+            manifest,authority,priorWall+toc(timer),pointer,auditHistory,stopState,stopRecords);
     end
     summary=ipm_cr.io.history('summary',summary,status,state,g,method,history,historyColumns,pointer,priorWall,toc(timer));
-    summary.checkpointAudits=auditHistory;
+    summary.checkpointAudits=auditHistory;summary.steadyObservations=stopRecords;
+    if ~isempty(opts.stop.physicalTime)
+        summary.physicalTimeStopOvershoot=(state.scale.physicalTime-opts.stop.physicalTime)+state.scale.physicalTimeLow;
+    end
+    ipm_cr.io.json(fullfile(folder,'case.json'),struct('format','ipm_cr_resolved_case_v1', ...
+        'method',method,'run',opts,'authority',authority,'source',manifest));
+    if opts.save.history
+        writetable(array2table(history,'VariableNames',historyColumns),fullfile(folder,'history.csv'));
+    end
+    if opts.save.data
+        if opts.save.history,packageHistory=history;else,packageHistory=[];end
+        meta=struct('status',status,'label',opts.save.label,'acceptedCheckpoint',pointer, ...
+            'stop',opts.stop,'steadyCandidate',summary.steadyCandidate);
+        summary.dataPackage=ipm_cr.pack(state,ctx,folder,meta,packageHistory,historyColumns);
+    end
+    summary.invocationWallSeconds=toc(timer);summary.accumulatedWallSeconds=priorWall+toc(timer);
+    summary.endedUtc=ipm_cr.io.identity('utc');
     ipm_cr.io.history('write',folder,summary,history,historyColumns);
     logline('END status=%s tau=%.17g steps=%d wall=%.6f maxStageCfl=%.6g gauge=%.3e', ...
         status,state.scale.canonicalTime,state.step,summary.invocationWallSeconds, ...
@@ -133,6 +172,16 @@ catch problem
     if opts.rethrowOnFailure,rethrow(problem);end
 end
 
+    function observe_steady()
+        if ~isempty(stopState)&&isfield(stopState,'lastStep')&&stopState.lastStep==state.step
+            summary.steadyCandidate=stopState.lastRecord.candidate;return;
+        end
+        policy=rmfield(opts.stop.steady,{'enabled','sampleEveryTau'});
+        [stopState,record]=ipm_cr.diag.steady(state,ctx,policy,stopState);
+        if isempty(stopRecords),stopRecords=record;else,stopRecords(end+1)=record;end
+        stopDirty=true;summary.steadyCandidate=record.candidate;
+        ipm_cr.io.json(fullfile(folder,'steady.json'),stopRecords);
+    end
     function logline(format,varargin)
         line=sprintf(format,varargin{:});fprintf(logfid,'[%s] %s\n',ipm_cr.io.identity('utc'),line);
         if opts.verbose,fprintf('%s\n',line);end
@@ -146,49 +195,9 @@ end
     end
 end
 
-function [opts,requested]=settings(overrides,root)
-assert(isstruct(overrides)&&isscalar(overrides),'ipm_cr:ExplicitRunnerOptions');
-opts=struct('outputDir',fullfile(root,'results','explicit_tau200'), ...
-    'tauEnd',200,'wallSeconds',600,'checkpointEveryTau',1,'checkpointWallSeconds',60, ...
-    'logEveryTau',1,'maxSteps',2000000,'resume',true,'verbose',true,'rethrowOnFailure',true);
-methodFields={'geometry','solverOptions','transport','cfl','maxDt','minDt','timeIntegrator','background'};requested=struct();
-if isfield(overrides,'explicitOptions'),requested=overrides.explicitOptions;end
-assert(isstruct(requested)&&isscalar(requested),'ipm_cr:ExplicitRunnerOptions');
-for alias={'mesh','poisson'}
-    name=alias{1};target='geometry';if strcmp(name,'poisson'),target='solverOptions';end
-    if isfield(requested,name)
-        assert(~isfield(requested,target),'ipm_cr:ExplicitRunnerOptions','Duplicate alias %s.',target);
-        requested.(target)=requested.(name);requested=rmfield(requested,name);
-    end
-end
-assert(all(ismember(fieldnames(requested),methodFields)),'ipm_cr:ExplicitRunnerOptions', ...
-    'explicitOptions contains an unknown numerical option.');
-names=fieldnames(overrides);
-for k=1:numel(names)
-    name=names{k};
-    if strcmp(name,'explicitOptions'),continue;
-    elseif strcmp(name,'mesh'),requested.geometry=overrides.(name);
-    elseif strcmp(name,'poisson'),requested.solverOptions=overrides.(name);
-    elseif ismember(name,methodFields),requested.(name)=overrides.(name);
-    else
-        assert(isfield(opts,name),'ipm_cr:ExplicitRunnerOptions','Unknown runner option %s.',name);
-        opts.(name)=overrides.(name);
-    end
-end
-opts.outputDir=char(opts.outputDir);
-assert(startsWith(opts.outputDir,filesep),'ipm_cr:ExplicitRunnerOutput','outputDir must be absolute.');
-for name={'tauEnd','wallSeconds','checkpointEveryTau','checkpointWallSeconds','logEveryTau'}
-    validateattributes(opts.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
-end
-validateattributes(opts.maxSteps,{'numeric'},{'scalar','integer','positive'});
-for name={'resume','verbose','rethrowOnFailure'}
-    validateattributes(opts.(name{1}),{'logical'},{'scalar'});
-end
-end
-
-function [pointer,audits]=commit(folder,state,g,wall,method,opts,history,names,source,authority,seconds,pointer,audits)
+function [pointer,audits]=commit(folder,state,g,wall,method,opts,history,names,source,authority,seconds,pointer,audits,stopState,stopRecords)
 cp=struct('state',state,'geometry',g,'wallOps',wall,'explicitOptions',method, ...
-    'runnerOptions',opts,'history',history,'historyColumns',{names}, ...
+    'runnerOptions',opts,'stopState',stopState,'stopRecords',stopRecords,'history',history,'historyColumns',{names}, ...
     'sourceInventory',source,'authority',authority,'auditHistory',audits, ...
     'accumulatedWallSeconds',seconds);
 [pointer,cp]=ipm_cr.io.checkpoint('save',folder,cp,pointer);audits=cp.auditHistory;

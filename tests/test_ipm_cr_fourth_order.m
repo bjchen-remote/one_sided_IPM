@@ -342,7 +342,7 @@ for level=1:o.timeLevels
         target=initial.scale.canonicalTime+o.timeFinalTau*step/n;
         while target-state.scale.canonicalTime>32*eps(max(1,abs(target)))
             remaining=target-state.scale.canonicalTime;
-            [next,info]=ipm_cr.time.step(state,g,wallOps,method,target,ctx);
+            [next,info]=ipm_cr.time.step(state,ctx,target,struct('maxDt',method.maxDt));
             actual=next.scale.canonicalTime-state.scale.canonicalTime;
             shortened=actual<remaining-256*eps(max(1,o.timeFinalTau));
             eventLimited=isfield(info,'peakEvent')&&info.peakEvent.limited;

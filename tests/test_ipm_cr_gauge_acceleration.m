@@ -1,5 +1,7 @@
 function report=test_ipm_cr_gauge_acceleration(outputDir,options)
 %TEST_IPM_CR_GAUGE_ACCELERATION Frozen-state branch Jacobian and legacy gauge.
+% Default execution uses only the analytic initial state. Historical tau200
+% checks require includeTau200=true and an explicit checkpointFolder.
 % No time is advanced. Both gauge solvers use exactly the same synchronized
 % density, already computed Poisson field, wall samples and transport
 % callback. Central differences test the complete transport arrays. Nodes
@@ -10,15 +12,18 @@ addpath(fullfile(root,'src'));
 if nargin<1||isempty(outputDir)
     outputDir=fullfile(root,'results','gauge_acceleration');
 end
-o=resolve(options,root);outputDir=char(outputDir);
+o=resolve(options);outputDir=char(outputDir);
 assert(startsWith(outputDir,filesep),'ipm_cr:GaugeTestOutput','Use an absolute output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'gauge_acceleration.json')), ...
     'ipm_cr:GaugeTestPreserve','Choose a fresh output directory.');
 timer=tic;
 report=struct('kind','frozen_density_transport_partials_and_legacy_IPC_comparison_v1', ...
-    'status','running','options',o,'timeAdvanced',0,'readOnlyCheckpointInspection',true, ...
+    'status','running','options',o,'timeAdvanced',0,'readOnlyCheckpointInspection',false, ...
     'oldTrajectorySourceIdentityClaimed',false,'records',struct([]), ...
+    'checks',struct('initial',struct('requested',o.includeInitial,'status','skipped','reason','Not requested'), ...
+        'history',struct('requested',o.includeTau200,'status','skipped','reason','Historical checkpoint was not requested')), ...
+    'requestedChecksSatisfied',false, ...
     'sourceInventory',source_inventory(),'sourceHashesUnchanged',false, ...
     'transportBranchDerivativeTolerance',1e-7,'legacyRootTolerance',1e-10, ...
     'legacyAuditTolerance',1e-8,'frozenEquivalenceTolerance',1e-8,'allChecksPassed',false,'elapsedSeconds',0, ...
@@ -26,6 +31,8 @@ report=struct('kind','frozen_density_transport_partials_and_legacy_IPC_compariso
         'This is a frozen-state equivalence test, not a trajectory, speed benchmark, or fourth-order certificate.', ...
         'The old tau200 density is reevaluated with the current operators; its historical flow is not used as an exact reference.', ...
         'Both gauge solvers share one actual Poisson field per state; any common source or Poisson error is outside this comparison.'}});
+if o.includeInitial,report.checks.initial.status='pending';report.checks.initial.reason='';end
+if o.includeTau200,report.checks.history.status='pending';report.checks.history.reason='';end
 persist(outputDir,report);
 try
     if o.includeInitial
@@ -33,10 +40,13 @@ try
         g=ctx.mesh;wallOps=ctx.wall;method=ctx.opts;
         row=check_state('analytic_initial',state,g,wallOps,method,o);
         row.checkpoint=struct('used',false);report.records=append(report.records,row);
+        report.checks.initial=struct('requested',true,'status','completed','reason','');
         report.elapsedSeconds=toc(timer);persist(outputDir,report);
     end
-    if o.includeTau200
+    historyAvailable=~isempty(o.checkpointFolder)&&isfile(fullfile(o.checkpointFolder,'latest.json'));
+    if o.includeTau200&&historyAvailable
         [cp,pointer]=load_endpoint(o.checkpointFolder);
+        report.readOnlyCheckpointInspection=true;
         beforeRho=cp.state.W;
         row=check_state('accepted_tau200_density',cp.state,cp.geometry,cp.wallOps,cp.explicitOptions,o);
         assert(isequaln(beforeRho,cp.state.W),'ipm_cr:GaugeTestMutation','The loaded accepted density changed.');
@@ -44,12 +54,20 @@ try
         row.checkpoint=struct('used',true,'pointer',pointer,'shaVerifiedBeforeAndAfter',true, ...
             'densityChanged',false,'timeAdvanced',0);
         report.records=append(report.records,row);
+        report.checks.history=struct('requested',true,'status','completed','reason','');
+    elseif o.includeTau200
+        report.checks.history=struct('requested',true,'status','skipped', ...
+            'reason','An explicit accepted checkpointFolder with latest.json is required; no historical test was executed');
     end
     report.sourceHashesUnchanged=isequaln(report.sourceInventory,source_inventory());
     assert(report.sourceHashesUnchanged,'ipm_cr:GaugeTestSources','Recorded numerical sources changed during testing.');
     report.allChecksPassed=~isempty(report.records)&&all([report.records.transportPartialChecksPassed])&& ...
         all([report.records.frozenGaugeEquivalencePassed]);
-    if report.allChecksPassed,report.status='passed_frozen_state_comparisons';
+    report.requestedChecksSatisfied=(~o.includeInitial||strcmp(report.checks.initial.status,'completed'))&& ...
+        (~o.includeTau200||strcmp(report.checks.history.status,'completed'));
+    if isempty(report.records),report.status='skipped_no_executed_checks';
+    elseif ~report.requestedChecksSatisfied,report.status='completed_with_skipped_requested_checks';
+    elseif report.allChecksPassed,report.status='passed_frozen_state_comparisons';
     else,report.status='completed_measurements_with_failed_checks';end
 catch problem
     report.status='failed';report.errorIdentifier=problem.identifier;
@@ -59,9 +77,9 @@ end
 report.elapsedSeconds=toc(timer);persist(outputDir,report);
 end
 
-function o=resolve(options,root)
-o=struct('includeInitial',true,'includeTau200',true,'explicitOptions',struct(), ...
-    'checkpointFolder',fullfile(root,'test','results','explicit_tau200_20261021_v1','native'), ...
+function o=resolve(options)
+o=struct('includeInitial',true,'includeTau200',false,'explicitOptions',struct(), ...
+    'checkpointFolder','', ...
     'partialSteps',[1e-4,1e-5,1e-6], ...
     'rateOffsets',[0,0;.13,.21;-.11,-.17]);
 assert(isstruct(options)&&isscalar(options)&&all(ismember(fieldnames(options),fieldnames(o))), ...
@@ -74,7 +92,11 @@ o.partialSteps=reshape(o.partialSteps,1,[]);
 assert(isnumeric(o.rateOffsets)&&size(o.rateOffsets,2)==2&&all(isfinite(o.rateOffsets),'all'), ...
     'ipm_cr:GaugeTestOptions','rateOffsets must have finite [c_l,delta] rows.');
 assert(isstruct(o.explicitOptions)&&isscalar(o.explicitOptions),'ipm_cr:GaugeTestOptions');
+assert(ischar(o.checkpointFolder)||(isstring(o.checkpointFolder)&&isscalar(o.checkpointFolder)), ...
+    'ipm_cr:GaugeTestOptions','checkpointFolder must be an explicit path.');
 o.checkpointFolder=char(o.checkpointFolder);
+assert(isempty(o.checkpointFolder)||startsWith(o.checkpointFolder,filesep), ...
+    'ipm_cr:GaugeTestOptions','Use an absolute checkpointFolder.');
 end
 
 function row=check_state(name,state,g,wallOps,method,o)
@@ -298,25 +320,16 @@ function inventory=source_inventory()
 paths={mfilename('fullpath'),which('ipm_cr.op.prepare'),which('ipm_cr.op.apply'),which('ipm_cr.gauge.rates'), ...
     which('ipm_cr.rhs'),which('ipm_cr.mesh.fill'), ...
     which('ipm_cr.mesh.sample'),which('ipm_cr.mesh.diff'), ...
-    which('ipm_cr.poisson.apply'),which('ipm_cr.gauge.seed'),which('ipm_cr.gauge.measure')};
+    which('ipm_cr.poisson.apply'),which('ipm_cr.gauge.seed'),which('ipm_cr.gauge.measure'), ...
+    which('ipm_cr.io.sha'),which('ipm_cr.io.json')};
 if ~endsWith(paths{1},'.m'),paths{1}=[paths{1},'.m'];end
-inventory=struct([]);
-for j=1:numel(paths)
-    assert(~isempty(paths{j})&&isfile(paths{j}),'ipm_cr:GaugeTestSource');
-    item=dir(paths{j});inventory=append(inventory,struct('path',paths{j},'bytes',item.bytes, ...
-        'sha256',ipm_cr.io.sha(paths{j})));
-end
+privateDir=fullfile(fileparts(mfilename('fullpath')),'private');
+paths{end+1}=fullfile(privateDir,'test_report.m');
+inventory=test_inventory(paths);
 end
 
 function persist(folder,report)
-temporary=fullfile(folder,'gauge_acceleration.writing.mat');save(temporary,'report','-v7.3');
-[ok,message]=movefile(temporary,fullfile(folder,'gauge_acceleration.mat'),'f');
-assert(ok,'ipm_cr:GaugeTestSave','%s',message);
-temporary=fullfile(folder,'gauge_acceleration.json.writing');fid=fopen(temporary,'w');
-assert(fid>=0,'ipm_cr:GaugeTestSave');cleanup=onCleanup(@()fclose(fid));
-fwrite(fid,jsonencode(report,'PrettyPrint',true),'char');clear cleanup
-[ok,message]=movefile(temporary,fullfile(folder,'gauge_acceleration.json'),'f');
-assert(ok,'ipm_cr:GaugeTestSave','%s',message);
+test_report(folder,'gauge_acceleration',report);
 end
 
 function rows=append(rows,row)

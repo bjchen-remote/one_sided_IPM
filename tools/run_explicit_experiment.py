@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import fcntl
 import json
+import math
 import os
 import shutil
 import signal
@@ -12,23 +13,35 @@ import subprocess
 import sys
 import time
 from common import (atomic, available_memory, freeze, initial_input, matlab_executable,
-                    now, process_rss, quote, require_kernel, source_files,
+                    now, process_rss, quote, relative_file, require_kernel, source_files,
                     stop_child, verify_snapshot)
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def read_options(path):
+    def reject(value):
+        raise ValueError('Non-finite JSON constant is not allowed: ' + value)
+    return json.loads(path.read_text(), parse_constant=reject)
+
+
 def prepare(folder, args):
-    options = json.loads(args.options.read_text()) if args.options else {}
+    option_file = args.case or args.options
+    options = read_options(option_file) if option_file else {}
     if not isinstance(options, dict):
         raise ValueError('Numerical options must be a JSON object')
-    authority = initial_input(ROOT)
-    inputs = source_files(ROOT) + [authority, Path('tools/common.py'), Path('tools/run_explicit_experiment.py')]
+    method = options.get('method', {}) if args.case else options
+    if not isinstance(method, dict):
+        raise ValueError('Numerical method must be a JSON object')
+    initial = options.get('initial', method.get('initial', 'data/initial.json'))
+    authority = initial_input(ROOT, initial)
+    inputs = source_files(ROOT) + [initial_input(ROOT), authority, relative_file(ROOT, initial),
+                                   Path('tools/common.py'), Path('tools/run_explicit_experiment.py')]
     if not args.prepare_only:
-        require_kernel(ROOT, options)
+        require_kernel(ROOT, method)
     folder.mkdir(parents=True, exist_ok=False)
     inventory = freeze(ROOT, folder / 'runtime', inputs)
-    initial_input(folder / 'runtime')
+    initial_input(folder / 'runtime', initial)
     atomic(folder / 'source_inventory.json', inventory)
     atomic(folder / 'explicit_options.json', options)
     # Options are immutable input, independent of mutable mission/progress records.
@@ -40,7 +53,8 @@ def prepare(folder, args):
         createdUtc=now(), deadlineUtc=deadline.isoformat(), segmentSeconds=args.segment_seconds,
         threads=1, rssLimitBytes=2 * 1024**3, minimumFreeDiskBytes=8 * 1024**3,
         matlab=args.matlab, sourceFrozen=True,
-        timeIntegrator=options.get('timeIntegrator', 'rk4'),
+        caseFormat=bool(args.case), initial=initial,
+        timeIntegrator=method.get('timeIntegrator', 'rk4'),
         timeControl='all_active_both_patches_all_stages_physical_CFL',
         implicitStages=0, polarOriginPresent=False, trajectoryAccuracyCertified=False,
         options=options, segments=[]))
@@ -71,7 +85,9 @@ def supervise(folder, matlab):
             raise RuntimeError('Frozen numerical options changed')
         if json.loads((folder / 'explicit_options.json').read_text()) != mission['options']:
             raise RuntimeError('Mission options differ from the frozen numerical input')
-        require_kernel(folder / 'runtime', mission['options'])
+        numerical = mission['options'].get('method', {}) if mission.get('caseFormat') else mission['options']
+        require_kernel(folder / 'runtime', numerical)
+        initial_input(folder / 'runtime', mission.get('initial', 'data/initial.json'))
         frozen = json.loads((folder / 'source_inventory.json').read_text())
         verify_snapshot(folder / 'runtime', frozen)
         expected_sources = sorted(Path(path) for path in frozen if path.startswith('src/') or path == 'data/initial.json')
@@ -101,12 +117,21 @@ def supervise(folder, matlab):
                     raise RuntimeError('Frozen source file set changed')
                 index = len(mission['segments']) + 1
                 script = folder / 'segment.m'
+                if mission.get('caseFormat'):
+                    invocation = (
+                        "opts=jsondecode(fileread('" + quote(folder / 'explicit_options.json') + "'));\n"
+                        "if ~isfield(opts,'run'),opts.run=struct();end\n"
+                        "opts.run.outputDir='" + quote(native) + "';opts.run.tauEnd=" + repr(mission['targetTau']) + ";\n"
+                        "opts.run.wallSeconds=" + repr(min(mission['segmentSeconds'], max(0.001, (deadline-dt.datetime.now(dt.timezone.utc)).total_seconds()))) + ";\n")
+                else:
+                    invocation = (
+                        "opts=struct('outputDir','" + quote(native) + "','tauEnd'," + repr(mission['targetTau']) + ","
+                        "'wallSeconds'," + repr(mission['segmentSeconds']) + ",'checkpointEveryTau',5,'checkpointWallSeconds',60,'logEveryTau',5);\n"
+                        "opts.explicitOptions=jsondecode(fileread('" + quote(folder / 'explicit_options.json') + "'));\n")
                 script.write_text(
                     "restoredefaultpath;maxNumCompThreads(1);\n"
                     "addpath('" + quote(folder / 'runtime/src') + "');\n"
-                    "opts=struct('outputDir','" + quote(native) + "','tauEnd'," + repr(mission['targetTau']) + ","
-                    "'wallSeconds'," + repr(mission['segmentSeconds']) + ",'checkpointEveryTau',5,'checkpointWallSeconds',60,'logEveryTau',5);\n"
-                    "opts.explicitOptions=jsondecode(fileread('" + quote(folder / 'explicit_options.json') + "'));\n"
+                    + invocation +
                     "summary=ipm_cr.run(opts);disp(summary.status);\n")
                 entry = dict(index=index, startedUtc=now(), maximumRssBytes=0)
                 mission['segments'].append(entry)
@@ -189,19 +214,35 @@ def supervise(folder, matlab):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('start', 'resume', 'status', '_supervise'))
-    parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--options', type=Path)
+    parser.add_argument('--output', type=Path, help='New run folder (default: case run.outputDir or result)')
+    options = parser.add_mutually_exclusive_group()
+    options.add_argument('--options', type=Path, help='Legacy numerical-method JSON')
+    options.add_argument('--case', type=Path, help='Portable config(\'case\') JSON')
     parser.add_argument('--matlab', help='MATLAB executable; otherwise discover it on this host')
-    parser.add_argument('--target', type=float, default=200)
-    parser.add_argument('--hours', type=float, default=50/60)
+    parser.add_argument('--target', type=float)
+    parser.add_argument('--hours', type=float)
     parser.add_argument('--segment-seconds', type=float, default=600)
     parser.add_argument('--prepare-only', action='store_true')
     args = parser.parse_args()
     if args.prepare_only and args.action != 'start':
         parser.error('--prepare-only is only valid with start')
-    folder = args.output.resolve()
+    case_run = {}
+    if args.case:
+        case = read_options(args.case)
+        if not isinstance(case, dict) or case.get('format') != 'ipm_cr_case_v1':
+            parser.error('--case requires an ipm_cr_case_v1 JSON object')
+        case_run = case.get('run', {})
+        if not isinstance(case_run, dict):
+            parser.error('case.run must be an object')
+    seconds = case_run.get('wallSeconds', 600 if args.case else 3000)
+    if not isinstance(seconds, (int,float)) or isinstance(seconds,bool) or not math.isfinite(seconds) or seconds<=0:
+        parser.error('case.run.wallSeconds must be a finite positive number')
+    args.target = args.target if args.target is not None else case_run.get('tauEnd', 200)
+    args.hours = args.hours if args.hours is not None else seconds / 3600
+    folder = (args.output or Path(case_run.get('outputDir', ROOT / 'result'))).resolve()
     if args.action == 'start':
-        if not (args.target > 0 and args.hours > 0 and args.segment_seconds > 0):
+        if not all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) and v>0
+                   for v in (args.target,args.hours,args.segment_seconds)):
             parser.error('Target and budgets must be positive')
         if not args.prepare_only:
             args.matlab = matlab_executable(args.matlab)

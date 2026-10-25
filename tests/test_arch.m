@@ -44,14 +44,16 @@ assert(isequaln(before,after)&&isequaln(fa.F,s.rhs.F)&&isequaln(Wa,s.W), ...
 changed=a.opts;changed.background.widthX=changed.background.widthX*1.01;
 c=ipm_cr.context(a.mesh,a.wall,changed);
 expect(@()ipm_cr.refresh(s,c),'ipm_cr:StateSetup');
-expect(@()ipm_cr.time.step(s,a.mesh,a.wall,changed,.001,a),'ipm_cr:StateContext');
+expect(@()ipm_cr.time.step(s,c,.001),'ipm_cr:StateContext');
 % Geometry identity must also reject a same-sized but differently spaced grid.
 changed=a.opts;changed.geometry.coreSpacing=.061;
 changed.geometry.coreHalfWidth=1.22;changed.geometry.coreHeight=1.22;
 g=ipm_cr.mesh.build(changed.geometry);
-expect(@()ipm_cr.time.step(s,g,a.wall,changed,.001,a),'ipm_cr:StateContext');
+c=ipm_cr.context(g,a.wall,changed);
+expect(@()ipm_cr.time.step(s,c,.001),'ipm_cr:StateContext');
 changed=a.opts;changed.transport.smoothSpeedCoefficient=.11;
-expect(@()ipm_cr.time.step(s,a.mesh,a.wall,changed,.001,a),'ipm_cr:StateContext');
+c=ipm_cr.context(a.mesh,a.wall,changed);
+expect(@()ipm_cr.time.step(s,c,.001),'ipm_cr:StateContext');
 % Time policy may vary without changing the mathematical RHS identity.
 [s,info]=ipm_cr.step(s,a,.001,struct('maxDt',.0005,'cfl',.2));
 assert(s.scale.canonicalTime==.0005&&info.realizedMaximumStageCfl<=.2*(1+128*eps), ...

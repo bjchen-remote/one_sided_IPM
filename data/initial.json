@@ -19,7 +19,6 @@
     "radialMap": "uniform_core",
     "coreRadius": 2,
     "coreTailFraction": 0.01,
-    "originFitDegree": 6,
     "stencilWidth": 7
   },
   "transport": {

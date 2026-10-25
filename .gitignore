@@ -17,6 +17,8 @@
 
 # Generated output and machine-specific native builds.
 **/results/
+**/result/
+/data/cases/
 **/runs/
 **/runtime/
 **/checkpoints/

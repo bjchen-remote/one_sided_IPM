@@ -147,3 +147,8 @@ SHA-256 384c69629b50ba0b7b3603d26f1fc6e493c5668d0c4e82d84c42bba43eb96c8b
 ```
 
 历史结果里的 `execute.m` 可能引用当时的活动入口。复现应恢复原依赖并核对记录的源码身份，不能借用当前求解器后宣称原实验得到复现。
+
+
+## 2026-10-24 发布入口整理
+
+已验证的精简先独立提交为6d63056。随后统一case配置和别名边界，移除维护配置的originRings/originFitDegree；内部时间步收为state/ctx/finalTau/controls。墙规范数值路径保留，未合并其观测算术。增加Gaussian新authority、原生活动域稳态观测及科学数据包；测试单清单、显式历史依赖与少量private报告/SHA工具见VALIDATION。README保留用户入口，参数细节在USAGE、契约在ARCHITECTURE、数值实验在算法报告、本地证据SHA在EVIDENCE.json。未删除历史运行数据、旧分支或初始authority。

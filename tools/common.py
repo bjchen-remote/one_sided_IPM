@@ -46,14 +46,14 @@ def relative_file(root, name):
     return Path(name)
 
 
-def initial_input(root):
-    descriptor = root / 'data/initial.json'
+def initial_input(root, manifest='data/initial.json'):
+    descriptor = root / relative_file(root, manifest)
     meta = json.loads(descriptor.read_bytes())
     if not isinstance(meta, dict) or meta.get('format') != 'ipm_cr_initial_v1':
         raise ValueError('Unsupported initial-input manifest')
     source = relative_file(root, meta.get('file'))
     if sha(root / source) != meta.get('sha256'):
-        raise ValueError('Initial input SHA differs from data/initial.json')
+        raise ValueError('Initial input SHA differs from ' + manifest)
     return source
 
 
