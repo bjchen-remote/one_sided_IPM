@@ -26,8 +26,10 @@ nPanels = max(1, ceil(log(rOuter/rInner)/panelWidth));
 edges = linspace(log(rInner), log(rOuter), nPanels+1);
 nr = nPanels*degree+1;
 t = zeros(nr,1);
-Dt = zeros(nr);
-Dtt = zeros(nr);
+% Preserve the panel arithmetic while storing only the nonzero blocks.
+panelNnz=nPanels*(degree+1)^2;
+Dt = spalloc(nr,nr,panelNnz);
+Dtt = spalloc(nr,nr,panelNnz);
 panelNodes = cell(nPanels,1);
 panelD = cell(nPanels,1);
 panelIndices = cell(nPanels,1);
@@ -46,7 +48,7 @@ interfaceRows = (degree+1:degree:nr-degree).';
 % The averaged derivative is useful for diagnostics and nodal evaluation.
 Dt(interfaceRows,:) = 0.5*Dt(interfaceRows,:);
 Dtt(interfaceRows,:) = 0.5*Dtt(interfaceRows,:);
-flux = zeros(nr);
+flux = spalloc(nr,nr,2*(nPanels-1)*(degree+1));
 for j = 1:nPanels-1
     row = j*degree+1;
     il = panelIndices{j}; ir = panelIndices{j+1};
@@ -88,7 +90,7 @@ harmonicBackwardError = zeros(1,nModes);
 harmonicRefinementUpdates = zeros(1,nModes);
 roundoffGuard = 128*eps;
 for k = 1:nModes
-    A = -Dtt + mu(k)*eye(nr);
+    A = -Dtt + mu(k)*speye(nr);
     A(interfaceRows,:) = flux(interfaceRows,:);
     A(1,:) = 0; A(1,1) = 1;
     if strcmp(outerBoundary, 'dirichlet')
@@ -97,7 +99,7 @@ for k = 1:nModes
         A(end,:) = Dt(end,:);
         A(end,end) = A(end,end) + sqrt(mu(k));
     end
-    scale = 1./max(abs(A),[],2);
+    scale = 1./full(max(abs(A),[],2));
     operators{k} = sparse(A);
     absOperators{k} = abs(operators{k});
     factors{k} = decomposition(spdiags(scale,0,nr,nr)*operators{k}, 'lu');

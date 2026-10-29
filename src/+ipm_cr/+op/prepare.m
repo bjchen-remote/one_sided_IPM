@@ -13,6 +13,20 @@ validateattributes(nu,{'numeric'},{'scalar','real','finite','nonnegative'});
 sigma=nu*min(c.dx,c.dy);
 reconstruction='linear5';
 if isfield(tr,'reconstruction'),reconstruction=char(tr.reconstruction);end
+% Standalone operator probes retain a reporting policy. Production config
+% selects 'error': only a complete CFL evaluation may reject a trial speed,
+% since Newton's private gauge probes must be allowed to cross speed zero.
+outerPolicy='report';
+if isfield(tr,'outerInflowPolicy'),outerPolicy=tr.outerInflowPolicy;end
+assert((ischar(outerPolicy)&&isrow(outerPolicy))|| ...
+    (isstring(outerPolicy)&&isscalar(outerPolicy)), ...
+    'ipm_cr:ExplicitOuterBoundary','Use outerInflowPolicy ''report'' or ''error''.');
+outerPolicy=char(outerPolicy);
+assert(any(strcmp(outerPolicy,{'report','error'})), ...
+    'ipm_cr:ExplicitOuterBoundary','Use outerInflowPolicy ''report'' or ''error''.');
+outerTolerance=0;
+if isfield(tr,'outerInflowTolerance'),outerTolerance=tr.outerInflowTolerance;end
+validateattributes(outerTolerance,{'numeric'},{'scalar','real','finite','nonnegative'});
 highOrderOuter=sigma>0||~strcmp(reconstruction,'legacy_weno5');
 % The selected mode keeps one outer extrapolation operator for both speed
 % signs. This is a numerical closure at finite R, not exact inflow data;
@@ -78,6 +92,16 @@ prepared=@apply;
         vt=-px.*si+py.*co;
         angularVelocity=vt./p.r(:);angularVelocity(:,[1,end])=0;
         radial=polarRadialOut;incoming=vr(end,:)'<0;
+        outer=outer_boundary(vr(end,:),p.r(end),incoming, ...
+            outerPolicy,outerTolerance,highOrderOuter,request.cfl);
+        if outer.enforced&&outer.unresolvedInflow
+            error('ipm_cr:UnprovidedOuterInflow', ...
+                ['The outer circle r=%.17g has %d incoming characteristics ' ...
+                '(maximum inward speed %.17g, tolerance %.17g), but no physical ' ...
+                'exterior density is supplied. Interior polynomial extrapolation ' ...
+                'does not prescribe inflow data.'],outer.radius, ...
+                outer.significantIncomingCount,outer.maximumInwardSpeed,outer.inflowTolerance);
+        end
         if ~highOrderOuter&&any(incoming)
             radial=polarRadialMixedOut;
             radial.plus(incoming,:)=polarRadialIn.plus(incoming,:);
@@ -147,12 +171,32 @@ prepared=@apply;
             position.smoothPhysicalSpeedFloor=sigma;
             position.reconstruction=reconstruction;
             position.outerDegreeSwitching=~highOrderOuter;
+            position.outerBoundary=outer;
             position.allActiveOverlapIncluded=true;
             assert(isfinite(rate)&&rate>=0,'ipm_cr:ExplicitTransportCfl', ...
                 'The complete active physical CFL rate must be finite and nonnegative.');
         end
-        result=struct('B',B,'rate',rate,'position',position,'partials',partials);
+        result=struct('B',B,'rate',rate,'position',position,'partials',partials, ...
+            'outerBoundary',outer);
     end
+end
+
+function info=outer_boundary(speed,radius,incoming,policy,tolerance,highOrder,complete)
+significant=speed < -tolerance;
+if highOrder,closure='interior_degree5_extrapolation';
+else,closure='interior_speed_selected_degree5_or_inflow_degree_extrapolation';end
+unresolved=any(significant);
+if unresolved,status='unprovided_physical_inflow';
+elseif any(incoming),status='inward_speed_within_explicit_tolerance';
+else,status='no_physical_inflow';end
+info=struct('radius',radius,'minimumRadialVelocity',min(speed), ...
+    'maximumRadialVelocity',max(speed),'incomingCount',nnz(incoming), ...
+    'significantIncomingCount',nnz(significant), ...
+    'maximumInwardSpeed',max(0,-min(speed)),'inflowTolerance',tolerance, ...
+    'policy',policy,'closure',closure,'physicalInflowDataSupplied',false, ...
+    'unresolvedInflow',unresolved,'exteriorTailCertified',false, ...
+    'completeEvaluation',complete,'enforced',complete&&strcmp(policy,'error'), ...
+    'status',status);
 end
 
 function [pair,useNative]=unit_pair(field,spacing,options,lowerIncoming,upperIncoming)

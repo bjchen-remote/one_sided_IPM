@@ -19,14 +19,20 @@ function [measurement,rateEvaluator] = measure(field,r,wallOps,options)
 % exact c_omega elimination: M(B+c_omega*R)=M(B)+c_omega*M(R). 'spline'
 % is also data-linear; 'pchip' is an explicit diagnostic option and is not.
 % A caller using pchip must independently audit the assembled complete RHS.
+% options.centerPeak=true computes the original global spline maximum from
+% q-max(q) once, then restores its amplitude; I/C and fixed references stay
+% unchanged. The original I/C observables use finite-axis piecewise-linear
+% and trapezoidal quadrature, not exact continuum wall integrals.
 % No claim of equivalence to the old Cartesian WENO operator is made.
 
 if nargin<4,options=struct();end
 assert(isstruct(options) && isscalar(options), ...
     'polar:WallOptions','Measurement options must be a scalar structure.');
-method='linear';radialDimension=1;
+method='linear';radialDimension=1;centerPeak=false;
 if isfield(options,'interpolation'),method=options.interpolation;end
 if isfield(options,'radialDimension'),radialDimension=options.radialDimension;end
+if isfield(options,'centerPeak'),centerPeak=options.centerPeak;end
+validateattributes(centerPeak,{'logical'},{'scalar'});
 assert(ischar(method) || (isstring(method) && isscalar(method)), ...
     'polar:WallInterpolation','Specify linear, spline or pchip interpolation.');
 method=char(method);
@@ -56,7 +62,17 @@ assert(x(1)>=-r(end) && x(end)<=r(end), ...
     sample_with_offset(field,'fieldOffset','wallOffset',options);
 q=ipm_cr.gauge.wallDiff(wallValues,wallOps.Dx);
 integral=ipm_cr.gauge.integral(q,wallOps,wallOps.rescaling);
-peak=ipm_cr.gauge.peak(q,wallOps);
+if centerPeak
+    anchor=max(q);peak=ipm_cr.gauge.peak(q-anchor,wallOps);
+    peak.evaluationAnchor=anchor;
+    peak.centeredMaximumCandidateValue=peak.maximumCandidateValue;
+    peak.value=peak.value+anchor;
+    peak.gridValue=peak.gridValue+anchor;
+    peak.maximumCandidateValue=peak.maximumCandidateValue+anchor;
+    peak.tieToleranceUsesCenteredValues=true;
+else
+    peak=ipm_cr.gauge.peak(q,wallOps);
+end
 centroid=ipm_cr.gauge.centroid(q,wallOps);
 assert(isfinite(peak.value) && peak.value>0 && ~centroid.degenerateEnergy, ...
     'polar:WallDegenerate','The original I/P/C gauges require positive P and nonzero energy.');
@@ -73,6 +89,9 @@ measurement=struct('definition','original_Cartesian_wall_IPC_after_polar_samplin
         max(abs(wallOps.rescaling.referenceWallIntegral),realmin), ...
     'centroidDisplacement',centroid.value-wallOps.rescaling.referenceWallGradientCentroid, ...
     'fieldOffsetUsed',fieldOffsetUsed,'rate',[]);
+if centerPeak
+    measurement.peakEvaluation='constant_shifted_original_global_natural_cubic_spline';
+end
 if isfield(options,'rateWallOffset')
     if isfield(options,'wallRateOffset')
         assert(isequaln(options.rateWallOffset,options.wallRateOffset), ...

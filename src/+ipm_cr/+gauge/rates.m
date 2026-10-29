@@ -3,9 +3,16 @@ function [rates,info]=rates(R,r,wallOps,baseEvaluator,Uref,guess,m,observe)
 % The caller binds one immutable density and its centered natural-spline
 % peak. The maintained solver may supply a cold seed; every accepted root
 % is then solved and audited using the SAME supplied observables.
+% A nonunique global maximum has no single P derivative. Preserve that
+% observable and fail closed rather than silently selecting a smooth branch.
+assert(isfield(m,'peak')&&isfield(m.peak,'valueDerivativeUnique')&& ...
+    isfield(m.peak,'tieNonunique')&&m.peak.valueDerivativeUnique&&~m.peak.tieNonunique, ...
+    'ipm_cr:ExplicitGaugePeak', ...
+    'The global wall-gradient maximum is nonunique; its I/P/C rate closure has no unique peak derivative.');
 target=[0;0;wallOps.rescaling.peakPositionRestoringRate* ...
     (m.C-wallOps.rescaling.referenceWallGradientCentroid)];
 tolerance=16*eps;stagnationLimit=2e-12;
+conditionFloor=1e-12;
 evaluations=0;iterations=0;condition=NaN;stagnationAccepted=false;
 fallbackUsed=false;fallbackInfo=struct();
 [z,found,g,v,b]=newton([guess(1);guess(2)+Uref]);
@@ -16,7 +23,8 @@ if ~found
     [z,found,g,v,b]=newton([seed.c_l;seed.delta]);
 end
 assert(found,'ipm_cr:ExplicitGaugeRoot', ...
-    'The complete original I/P/C equations could not be resolved with the supplied peak functional.');
+    ['The complete original I/P/C equations require a finite, sufficiently conditioned ' ...
+    'speed Jacobian (rcond >= %.3g); last rcond %.3g.'],conditionFloor,condition);
 cw=-v(2);complete=observe(b+cw*R);residual=complete.rate.normalized+target;
 assert(all(isfinite(residual))&&norm(residual,inf)<=1e-8, ...
     'ipm_cr:ExplicitGaugeRoot','The assembled wall RHS failed I/P/C.');
@@ -24,7 +32,8 @@ rates=struct('c_l',z(1),'delta',z(2),'c_r',z(2)-Uref,'c_omega',cw,'Uref',Uref);
 info=struct('definition','original_IPC_exact_transport_speed_Jacobian_Newton', ...
     'auditResidual',residual,'rootResidual',g,'rootTolerance',tolerance, ...
     'stagnationResidualLimit',stagnationLimit,'boundedStagnationAccepted',stagnationAccepted, ...
-    'rootCondition',condition,'iterations',iterations,'evaluations',evaluations, ...
+    'rootCondition',condition,'rootConditionFloor',conditionFloor, ...
+    'iterations',iterations,'evaluations',evaluations, ...
     'branchJacobianUsed',true,'fallbackUsed',fallbackUsed,'fallbackUsedOnlyAsSeed',fallbackUsed, ...
     'fallbackInformation',fallbackInfo);
 
@@ -33,9 +42,8 @@ info=struct('definition','original_IPC_exact_transport_speed_Jacobian_Newton', .
         for iteration=1:8
             iterations=iterations+1;
             [g,v,b,J]=probe(point);merit=norm(g,inf);
-            condition=rcond(J);
+            if ~regular_jacobian(J),return;end
             if merit<=tolerance,found=true;return;end
-            if ~isfinite(condition)||condition<1e-12,return;end
             direction=-J\g;
             limit=4*max(1,norm(point,inf));
             if norm(direction,inf)>limit,direction=direction*(limit/norm(direction,inf));end
@@ -54,7 +62,13 @@ info=struct('definition','original_IPC_exact_transport_speed_Jacobian_Newton', .
                 return;
             end
         end
-        [g,v,b]=probe(point);found=norm(g,inf)<=tolerance;
+        [g,v,b,J]=probe(point);
+        found=regular_jacobian(J)&&norm(g,inf)<=tolerance;
+    end
+    function regular=regular_jacobian(J)
+        condition=NaN;
+        if all(isfinite(J),'all'),condition=rcond(J);end
+        regular=isfinite(condition)&&condition>=conditionFloor;
     end
     function [g,v,b,J]=probe(point)
         evaluations=evaluations+1;

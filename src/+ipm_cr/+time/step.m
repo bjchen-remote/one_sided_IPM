@@ -124,7 +124,7 @@ info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
     'originAmplitudeAdvancedWithSameTableau',true,'sspMethod',strcmp(method,'ssprk3'), ...
     'analyticBackgroundVariableChange',hasResidual);
 
-    function [f,rhoActual]=stage(field,z,previous,wantDiagnostics)
+    function [f,rhoActual]=stage(field,z,previous,wantDiagnostics,physicalIncrement)
         if nargin<4,wantDiagnostics=false;end
         currentStageTau=z(5);
         speed=exp(z(2)-z(1));
@@ -134,7 +134,7 @@ info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
         rhsEvaluations=rhsEvaluations+1;
         peakIndex=note_peak([],currentStageTau, ...
             (currentStageTau-initial.scale.canonicalTime)/dt,false,false);
-        staged=initial;staged.scale=unpack(z,initial.scale);staged.rhs=previous;
+        staged=initial;staged.scale=ipm_cr.time.stageScale(initial.scale,z,physicalIncrement);staged.rhs=previous;
         if hasResidual,staged.eta=field;else,staged.W=field;end
         [f,rhoActual]=ipm_cr.rhs(staged,ctx,wantDiagnostics);
         snapshot=ipm_cr.time.peak(f);names=fieldnames(snapshot);
@@ -145,11 +145,9 @@ info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
     function s=finish(old,q,rhoActual,z,f,h,increment)
         assert(all(isfinite(z))&&isfinite(increment)&&increment>0, ...
             'ipm_cr:ExplicitScale','The scalar state and weighted clock increment must be finite.');
-        s=old;s.W=rhoActual;s.rhs=f;s.scale=unpack(z,old.scale);
+        s=old;s.W=rhoActual;s.rhs=f;s.scale=ipm_cr.time.stageScale(old.scale,z,increment);
         if hasResidual,s.eta=q;end
         s.scale.canonicalTime=old.scale.canonicalTime+h;
-        [s.scale.physicalTime,s.scale.physicalTimeLow]=clock_add( ...
-            old.scale.physicalTime,old.scale.physicalTimeLow,increment);
         assert(isfinite(s.scale.physicalTime)&&isfinite(s.scale.physicalTimeLow)&& ...
             (s.scale.physicalTime>old.scale.physicalTime|| ...
             (s.scale.physicalTime==old.scale.physicalTime&&s.scale.physicalTimeLow>old.scale.physicalTimeLow)), ...
@@ -230,7 +228,7 @@ end
 
 function yes=recoverable(problem)
 yes=any(strcmp(problem.identifier,{'polar:GaugeRootUnresolved','polar:GaugeFullRhsAudit', ...
-    'polar:WallDegenerate','ipm_cr:ExplicitGaugeAudit','ipm_cr:ExplicitGaugeRoot','ipm_cr:AccuracyGate', ...
+    'polar:WallDegenerate','ipm_cr:ExplicitGaugeAudit','ipm_cr:ExplicitGaugeRoot','ipm_cr:ExplicitGaugePeak','ipm_cr:AccuracyGate', ...
     'ipm_cr:ExplicitScale','ipm_cr:ExplicitClock','ipm_cr:ExplicitState', ...
     'ipm_cr:ExplicitTransportNonfinite','ipm_cr:ExplicitSynchronization', ...
     'ipm_cr:ExplicitStageCfl'}));
@@ -241,12 +239,4 @@ assert(isnumeric(rate)&&isreal(rate)&&isscalar(rate)&&isfinite(rate)&&rate>=0, .
 end
 function z=pack(s)
 z=[s.logC_l;s.logC_omega;s.physicalTime;s.X_shift;s.canonicalTime;s.densityOrigin];
-end
-function s=unpack(z,s)
-s.logC_l=z(1);s.logC_omega=z(2);s.physicalTime=z(3);s.X_shift=z(4);s.canonicalTime=z(5);s.densityOrigin=z(6);
-end
-function [high,low]=clock_add(high,low,increment)
-% Preserve the historical compensated positive-increment clock arithmetic.
-s=high+increment;b=s-high;e=(high-(s-b))+(increment-b);
-t=low+e;high=s+t;low=(s-high)+t;
 end

@@ -30,6 +30,7 @@ else
         'skewWeight',p.gaussianSkewWeight,'tailCorrection',true);
 end
 transport=cfg.transport;transport.reconstruction='linear5';transport.smoothSpeedCoefficient=.1;
+transport.outerInflowPolicy='error';transport.outerInflowTolerance=0;
 opts=struct('geometry',struct(),'solverOptions',struct('coreDegree',[48,48], ...
     'angularDegree',64,'polarDegree',16,'rOuter',1e10), ...
     'transport',transport,'cfl',.3,'maxDt',.2,'minDt',1e-10, ...
@@ -48,6 +49,9 @@ opts.timeIntegrator=char(validatestring(opts.timeIntegrator,{'rk4','ssprk3'}));
 for name={'geometry','solverOptions','transport','background'}
     assert(isstruct(opts.(name{1}))&&isscalar(opts.(name{1})),'ipm_cr:Config','Use scalar module options.');
 end
+% A partial transport override must not silently disable the production gate.
+if ~isfield(opts.transport,'outerInflowPolicy'),opts.transport.outerInflowPolicy='error';end
+if ~isfield(opts.transport,'outerInflowTolerance'),opts.transport.outerInflowTolerance=0;end
 if sampled
     assert(isfield(opts.background,'kind')&&strcmp(opts.background.kind,'none'), ...
         'ipm_cr:SampledBackground','A sampled density requires background.kind=''none''; no analytic background is defined.');

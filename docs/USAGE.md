@@ -90,6 +90,12 @@ c.stop.steady.minTau = 200;
 
 候选不是连续误差、全域精度或网格收敛证书。`eta` 的 RHS、接近机器精度的 I/P/C 残差、有限时间目标和近场通过均不替代这些条件。CFL、Poisson 原验收及直接回退照常执行。
 
+### 数值完整性诊断
+
+生产输运默认 `method.transport.outerInflowPolicy='error'`、`outerInflowTolerance=0`：有限外圆出现未提供数据的入流时以 `ipm_cr:UnprovidedOuterInflow` 停止。若明确要研究原来的内侧多项式外延，可显式设为 `'report'`；这只关闭拒绝，不补出物理边界数据。`rhs.cflPosition.outerBoundary` 记录方向、速度、容差及外延定义。
+
+`rhs.representationAudit` 报告完整 Q 与 `D_X F` 的离散表示缺陷。`rhs.poisson.nativeReconstructionDefect` 比较谱解的离网格 Laplacian 与同一原生源重构，始终不标作独立连续误差证书。可在 `method.solverOptions` 显式启用 `requireNativeDefect=true` 并指定 `nativeDefectTolerance`；`overlapAbsoluteVelocityTolerance` 和 `overlapCenteredVelocityTolerance` 可增设绝对/去共同平移的速度门限。新增门与原门按 AND 联合，不替代或放宽原验收；默认只报告新缺陷，合适容差须由具体网格验证。
+
 ## 初值
 
 主入口的任意表达式通过 `set_initial` 物化，采用无背景 W 路径。独立 Gaussian 工具仍可使用匹配的解析背景，此时才有严格零 η 初态。

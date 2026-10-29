@@ -22,14 +22,20 @@ assert(isstruct(source)&&isscalar(source)&&all(isfield(source,{'core','polar'}))
 % CACHE is owned by context; no process-global solver or source values.
 phase=tic;
 qc=apply_map(cache.sourceCore,source);qp=apply_map(cache.sourcePolar,source);
+auditCore=apply_map(cache.auditSourceCore,source);
+auditPolar=apply_map(cache.auditSourcePolar,source);
 if ~isempty(analyticSource)
     qc=qc+analyticSource(cache.solver.Core.X,cache.solver.Core.Y);
     qp=qp+analyticSource(cache.solver.Polar.X,cache.solver.Polar.Y);
+    queries=cache.solver.AuditQueries;
+    auditCore=auditCore+analyticSource(queries.core.x,queries.core.y);
+    auditPolar=auditPolar+analyticSource(queries.polar.x,queries.polar.y);
     assert(all(isfinite(qc),'all')&&all(isfinite(qp),'all'), ...
         'ipm_cr:ExplicitAnalyticSource','The complete analytic-offset spectral source must be finite.');
 end
 sourceSeconds=toc(phase);
-[solution,info]=cache.solver.solve(struct('core',qc,'polar',qp));
+nativeAudit=struct('core',auditCore,'polar',auditPolar,'solverId',cache.solver.Id);
+[solution,info]=cache.solver.solve(struct('core',qc,'polar',qp,'nativeReconstructionAudit',nativeAudit));
 phase=tic;
 core=return_core(cache,solution,g,includePsi);
 polar=return_polar(cache,solution,g,includePsi);
@@ -62,6 +68,9 @@ info.velocityDerivativesConsistentWithSpectralInterpolants=true;
 info.coreReturnMethod=cache.coreReturnMethod;
 info.returnIncludesPsi=includePsi;
 info.maximumOffGridStrongResidualScaledBySource=NaN;
+info.maximumNativeReconstructionDefectScaledBySource=info.nativeReconstructionDefect.scaledMaximum;
+info.nativeReconstructionDefectSourceMapsCached=true;
+info.nativeReconstructionDefectIsIndependentContinuumResidual=false;
 info.strongResidualIsAlgebraicResidual=false;info.strongResidualIsAccuracyCertificate=false;
 info.sourceInterpolationAccuracyCertified=false;info.outerSourceTailCertified=false;
 info.analyticBackgroundSource=~isempty(analyticSource);
@@ -90,7 +99,10 @@ if c.coreSeparable
     ux=-By*(sc.Dy*solution.core.psi)*Bx';
     uy=By*(solution.core.psi*sc.Dx')*Bx';
 else
-    v=c.solver.evaluate(solution,g.core.X,g.core.Y);psi=v.psi;ux=v.u1;uy=v.u2;
+    fields={'u1','u2'};if includePsi,fields=[{'psi'},fields];end
+    v=c.solver.evaluate(solution,g.core.X,g.core.Y,fields);
+    psi=[];if includePsi,psi=v.psi;end
+    ux=v.u1;uy=v.u2;
 end
 wall=g.core.Y==0;if includePsi,psi(wall)=0;end;uy(wall)=0;
 assert(all(isfinite(psi),'all')&&all(isfinite(ux),'all')&&all(isfinite(uy),'all'), ...

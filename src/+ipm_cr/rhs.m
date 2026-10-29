@@ -52,11 +52,13 @@ if split
     % time. timeH is its CENTERED canonical-time contribution, including
     % dt/dtau. Subtract it only in eta's equation; the full-W gauge base
     % and the full origin-amplitude transport remain unchanged.
-    residualRhs=struct('core',residualTransport.core+rates.c_omega*eta.core-T0-background.core.timeH, ...
-        'polar',residualTransport.polar+rates.c_omega*eta.polar-T0-background.polar.timeH);
+    residualBase=struct('core',residualTransport.core+rates.c_omega*eta.core-T0, ...
+        'polar',residualTransport.polar+rates.c_omega*eta.polar-T0);
+    residualRhs=struct('core',residualBase.core-background.core.timeH, ...
+        'polar',residualBase.polar-background.polar.timeH);
     residualRhs=ipm_cr.mesh.fill(residualRhs,g);
     residualRhs.core(1,g.core.originIndex)=0;
-    F=struct();Q=[];
+    F=struct();Q=[];assemblyDifference=struct();
     if wantDiagnostics
         dF=ipm_cr.mesh.diff(residualRhs,g);
         dq=ipm_cr.mesh.fill(struct('core',dF.core.x,'polar',dF.polar.x),g);
@@ -65,8 +67,16 @@ if split
     for patch={'core','polar'}
         key=patch{1};p=g.(key);b=background.(key);
         gaugeX=rates.c_l*p.X+rates.c_r;gaugeY=rates.c_l*p.Y;
-        Ht=-gaugeX.*b.x-gaugeY.*b.y+rates.c_omega*b.H+rates.c_r*b.originX+b.timeH;
-        F.(key)=residualRhs.(key)+Ht;
+        Ht=-gaugeX.*b.x-gaugeY.*b.y+rates.c_omega*b.H+rates.c_r*b.originX;
+        % Keep the prescribed ghost representation, where interpolation and
+        % analytic background evaluation need not commute. At ACTIVE points
+        % cancel the explicit timeH algebraically before floating arithmetic.
+        F.(key)=residualRhs.(key)+(Ht+b.timeH);
+        stable=residualBase.(key)+Ht;active=p.active;
+        if wantDiagnostics
+            assemblyDifference.(key)=max(abs(F.(key)(active)-stable(active)));
+        end
+        F.(key)(active)=stable(active);
         if wantDiagnostics
             Htx=(rates.c_omega-rates.c_l)*b.x-gaugeX.*b.xx-gaugeY.*b.xy+b.timeX;
             Q.(key)=dq.(key)+Htx;
@@ -112,6 +122,23 @@ if split
     evaluation.residualRhs=residualRhs;
     evaluation.densityRepresentation='W=eta+G-G(0); analytic prescribed background with canonical time derivatives';
     evaluation.analyticBackgroundSource=true;
+    evaluation.completeFAssembly='explicit background time terms eliminated on active nodes; original ghost representation retained';
+    if wantDiagnostics
+        % q=D_h eta+H_X, so q_tau and D_h(W_tau) need not agree exactly.
+        % This is a discrete representation defect, not continuum error.
+        dComplete=ipm_cr.mesh.diff(F,g);defect=struct();
+        for patch={'core','polar'}
+            key=patch{1};active=g.(key).active;
+            delta=Q.(key)(active)-dComplete.(key).x(active);
+            defect.(key)=struct('absoluteInfinity',max(abs(delta)), ...
+                'activeSampleCount',nnz(active));
+        end
+        evaluation.representationAudit=struct('available',true,'QDefinition','time derivative of q=D_h eta+H_X', ...
+            'comparison','Q-D_h F on active nodes','patches',defect, ...
+            'maximumAbsoluteDefect',max(defect.core.absoluteInfinity,defect.polar.absoluteInfinity), ...
+            'eliminatedTimeCancellationDifference',assemblyDifference, ...
+            'continuumErrorCertified',false);
+    end
 end
 
     function [wall,partials]=base(cl,delta)
