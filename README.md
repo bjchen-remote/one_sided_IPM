@@ -2,7 +2,7 @@
 
 `main` 维护 `ipm_cr`：均匀 Cartesian 张量核心、不含原点的极坐标环带、独立谱 Poisson 求解，以及全部活动点、全部阶段受物理 CFL 约束的显式 RK4。解析背景与残差分离用于控制远场表示及舍入误差。
 
-[运行与数据](docs/USAGE.md) · [架构与接口](docs/ARCHITECTURE.md) · [网格连接](docs/CONNECTION_METHOD.md) · [算法报告](test/ALGORITHM_REPORT.tex) · [分支与复现](REPOSITORY.md) · [验收](docs/VALIDATION.md)
+[运行与数据](docs/USAGE.md) · [架构与接口](docs/ARCHITECTURE.md) · [网格连接](docs/CONNECTION_METHOD.md) · [算法报告](test/ALGORITHM_REPORT.tex) · [分支与复现](REPOSITORY.md) · [验收](docs/VALIDATION.md) · [维护入口](docs/MAINTENANCE.md)
 
 ## 网格一览
 
