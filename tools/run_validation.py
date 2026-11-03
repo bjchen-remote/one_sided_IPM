@@ -315,7 +315,8 @@ def main():
         for path, expected in external.items():
             if sha(Path(path)) != expected:
                 raise RuntimeError('External test input changed: ' + path)
-        expected_sources = set(originals) | ({binary.relative_to(ROOT)} if build_native else set())
+        expected_sources = set(originals) | ({binary.relative_to(ROOT),
+            Path('src/+ipm_cr/+mesh/sampleMex' + mex_extension())} if build_native else set())
         if set(source_files(ROOT)) != expected_sources:
             raise RuntimeError('Unexpected production source file-set change during validation')
         receipt.update(productionSourceUnchanged=True, testInputsUnchanged=True,

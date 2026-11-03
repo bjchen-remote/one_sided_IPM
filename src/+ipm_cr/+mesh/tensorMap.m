@@ -1,8 +1,11 @@
-function M=tensorMap(r,theta,rq,tq,width)
+function M=tensorMap(r,theta,rq,tq,width,extrapolate)
 %TENSORMAP Sparse rowwise local interpolation of an r-by-theta field.
+% Optional endpoint polynomial continuation is explicit; sampling and source
+% maps keep the default no-extrapolation contract.
+if nargin<6,extrapolate=false;end
 assert(numel(rq)==numel(tq),'ipm_cr:CarrierInterpolation','Query axes must have matching lengths.');
-R=ipm_cr.mesh.localMap(r,rq,width);
-T=ipm_cr.mesh.localMap(theta,tq,width);
+R=ipm_cr.mesh.localMap(r,rq,width,extrapolate);
+T=ipm_cr.mesh.localMap(theta,tq,width,extrapolate);
 nq=numel(rq);nr=numel(r);nt=numel(theta);
 [ri,rc,rv]=find(R');[ti,tc,tv]=find(T'); %#ok<ASGLU>
 % Each query has at most width nonzeros. Build compact rowwise lists after
@@ -19,7 +22,10 @@ for j=1:width
     col=rcols(valid,:)+nr*(tcols(valid,j)-1);
     value=rvals(valid,:).*tvals(valid,j);
     use=rcols(valid,:)>0&value~=0;
-    rows{j}=row(use);cols{j}=col(use);vals{j}=value(use);
+    % A single surviving query makes MATLAB preserve row orientation.
+    % Normalize every block before concatenating unequal stencil counts.
+    rows{j}=reshape(row(use),[],1);cols{j}=reshape(col(use),[],1);
+    vals{j}=reshape(value(use),[],1);
 end
 M=sparse(vertcat(rows{:}),vertcat(cols{:}),vertcat(vals{:}),nq,nr*nt);
 end

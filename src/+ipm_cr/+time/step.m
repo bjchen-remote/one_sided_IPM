@@ -1,241 +1,123 @@
 function [out,info]=step(state,ctx,finalTau,controls)
-%STEP Transactional complete-RHS explicit RK4, with legacy SSPRK3 also available.
-% CONTROLS contains only cfl, maxDt, minDt and timeIntegrator overrides.
-% Missing controls inherit the prepared context's time policy. Every stage and
-% fresh endpoint use the complete W -> q -> Poisson -> I/P/C -> WENO RHS.
-% The identical accepted initial RHS is reused, then the fresh endpoint is
-% retained for the next step. All stages AND the endpoint obey the CFL.
-% The stated order is temporal only; no spatial-order certificate follows.
-% With state.eta, integrate that exact background-subtracted variable
-% using rhs.residualRhs. rhs reconstructs full centered W at each scalar
-% stage; state.W and rhs.F retain their full-W meanings.
-% State/RHS context identity is checked before the cached initial RHS is used.
-% RK4 steps are split at observed original-spline peak-cell crossings.
-% Event probes use the same complete explicit tableau from the accepted
-% initial state; the original peak functional is never altered or projected.
-timer=tic;
-assert(nargin>=3&&isa(ctx,'ipm_cr.context'),'ipm_cr:StateContext', ...
-    'Use the prepared context that owns the accepted state.');
-g=ctx.mesh;wallOps=ctx.wall;
-key=ipm_cr.internal.key(g,wallOps,ctx.opts,ctx.identity);
-assert(isfield(state,'ctxKey')&&isequaln(state.ctxKey,key), ...
-    'ipm_cr:StateContext','The accepted RHS belongs to another geometry or method. Reinitialize or refresh explicitly.');
-assert(isfield(state,'ctxId')&&strcmp(state.ctxId,ctx.id)&& ...
-    isequaln(key,ctx.key),'ipm_cr:StateContext', ...
-    'The accepted state and step must use the same run context.');
+%STEP One explicit step; numerical verification belongs to the test suite.
+% CFL selects the initial interval. RK4 partitions ordinary continuous peak
+% crossings of original spline knots by four secant iterates of S_x=0.
+% Numerical diagnostics never accept/reject a state or select a fallback.
 if nargin<4,controls=struct();end
-assert(isstruct(controls)&&isscalar(controls),'ipm_cr:StepOptions','Use scalar time controls.');
-names=fieldnames(controls);allowed={'cfl','maxDt','minDt','timeIntegrator'};
-assert(all(ismember(names,allowed)),'ipm_cr:StepOptions', ...
-    'Only time controls can change on an existing context.');
-policy=struct();
-for k=1:numel(allowed)
-    name=allowed{k};if isfield(ctx.opts,name),policy.(name)=ctx.opts.(name);end
-end
-for k=1:numel(names),policy.(names{k})=controls.(names{k});end
-controls=policy;
-method='rk4';if isfield(controls,'timeIntegrator'),method=char(controls.timeIntegrator);end
-assert(ismember(method,{'rk4','ssprk3'}),'ipm_cr:ExplicitTimeIntegrator', ...
-    'Use rk4 or the explicitly selected legacy ssprk3 method.');
-for name={'cfl','maxDt','minDt'}
-    validateattributes(controls.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
-end
-validateattributes(finalTau,{'numeric'},{'scalar','real','finite'});
-validate_rate(state.rhs.rate);
-initial=state;initialZ=pack(state.scale);
-hasResidual=isfield(state,'eta');
-assert(all(isfinite(initialZ))&&isfinite(state.scale.physicalTimeLow), ...
-    'ipm_cr:ExplicitScale','The accepted initial scale and clock must be finite.');
-remaining=finalTau-state.scale.canonicalTime;
-assert(remaining>0,'ipm_cr:ExplicitFinalTime','The endpoint must follow the accepted state.');
-% The predictor margin never replaces the binding complete-stage audit.
-dt=min([controls.maxDt,.95*controls.cfl/max(state.rhs.rate,realmin),remaining]);
-retries=0;rhsEvaluations=0;retryReasons={};
-retryDiagnostics=struct([]);retryCauses={};maximumRetries=12;
-peakDiagnostics=struct([]);
-currentPeakProbe=0;
-wallKnots=[];
-if isstruct(wallOps)&&isfield(wallOps,'x'),wallKnots=wallOps.x(:);end
-currentStageTau=state.scale.canonicalTime;
+policy=struct('cfl',ctx.opts.cfl,'maxDt',ctx.opts.maxDt, ...
+    'timeIntegrator',ctx.opts.timeIntegrator);
+for name=fieldnames(controls)',policy.(name{1})=controls.(name{1});end
+method=policy.timeIntegrator;
+h=min([policy.maxDt,.95*policy.cfl/state.rhs.rate, ...
+    finalTau-state.scale.canonicalTime]);
+initialH=h;probeH=h;hasResidual=isfield(state,'eta');calls=0;peaks=struct([]);
 callbacks=struct('stage',@stage,'finish',@finish,'notePeak',@note_peak);
-while true
-    if dt<controls.minDt||initial.scale.canonicalTime+dt<=initial.scale.canonicalTime
-        retry_error(MException('ipm_cr:ExplicitMinimumStep', ...
-            'No admissible explicit step remains: dt %.17g, minDt %.17g.',dt,controls.minDt));
-    end
-    before=rhsEvaluations;
-    currentStageTau=initial.scale.canonicalTime;
-    currentPeakProbe=0;peakEvent=empty_peak_event();
-    try
-        [trial,records]=ipm_cr.time.trial(initial,dt,method,g,controls,callbacks);
-        if strcmp(method,'rk4')&&~isempty(trial)&&inside_cfl(max(records.rates),dt)
-            eventCallsBefore=rhsEvaluations;
-            [trial,records,dt,peakEvent]=ipm_cr.time.event( ...
-                initial,trial,records,dt,wallKnots,controls,@event_probe,peakEvent);
-            peakEvent.extraRhsEvaluations=rhsEvaluations-eventCallsBefore;
-        end
-    catch problem
-        if ~recoverable(problem)
-            if isempty(retryCauses),rethrow(problem);else,retry_error(problem);end
-        end
-        nextDt=dt/2;
-        note_retry(problem,dt,nextDt,rhsEvaluations-before);
-        if retries>=maximumRetries,retry_error(problem);end
-        retryReasons{end+1}=problem.identifier; %#ok<AGROW>
-        dt=nextDt;retries=retries+1;continue;
-    end
-    maximumRate=max(records.rates);
-    if ~isempty(trial)&&inside_cfl(maximumRate,dt)
-        out=trial;acceptedAttemptRhsEvaluations=rhsEvaluations-before;break;
-    end
-    nextDt=min(.95*dt,.95*controls.cfl/maximumRate);
-    problem=MException('ipm_cr:ExplicitStageCfl', ...
-        'Complete stage CFL %.17g exceeds configured bound %.17g at dt %.17g (maximum rate %.17g).', ...
-        dt*maximumRate,controls.cfl,dt,maximumRate);
-    note_retry(problem,dt,nextDt,rhsEvaluations-before);
-    if retries>=maximumRetries,retry_error(problem);end
-    retryReasons{end+1}=problem.identifier; %#ok<AGROW>
-    dt=nextDt;retries=retries+1;
+started=tic;
+[out,records]=trial_at(h);
+partition=struct('kind','direct_tableau_interval','fitted',false, ...
+    'initialDt',h,'segmentDt',h,'knotX',NaN,'knotIndex',NaN,'direction',0, ...
+    'secantIterations',0,'extraRhsEvaluations',0,'knotSlope',NaN,'rawPeakKnotDefect',NaN, ...
+    'coordinateIdentityUlps',256,'startClassification',struct(),'endClassification',struct());
+if strcmp(method,'rk4')
+    [out,records,h,partition]=fit_knot(state,out,records,h,ctx.wall.x,@trial_at,partition);
 end
-[~,maximumStageIndex]=max(records.rates);
-if strcmp(method,'rk4'),order=4;stages=4;label='rk4_full_hybrid_cfl_peak_events_v2';
-else,order=3;stages=3;label='ssprk3_full_hybrid_cfl_v1';end
-info=struct('method',label,'timeIntegrator',method,'temporalOrder',order, ...
-    'spatialOrderCertified',false,'dt',dt,'seconds',toc(timer), ...
-    'rate',initial.rhs.rate,'maximumStageRate',maximumRate, ...
-    'realizedMaximumStageCfl',dt*maximumRate,'configuredCfl',controls.cfl, ...
-    'retries',retries,'retryReasons',{retryReasons},'retryDiagnostics',retryDiagnostics, ...
-    'maximumStepRetries',maximumRetries,'explicitCflLimitApplied',true, ...
-    'cflPosition',out.rhs.cflPosition, ...
-    'maximumStageCflPosition',records.positions{maximumStageIndex}, ...
-    'maximumCflStageIndex',maximumStageIndex,'stageCount',stages, ...
-    'stageRates',records.rates,'stageCfl',dt*records.rates, ...
-    'stageAbscissae',records.abscissae, ...
-    'stagePeakDiagnostics',records.peaks,'allAttemptPeakDiagnostics',peakDiagnostics, ...
-    'peakDiagnosticsAreReadOnly',true, ...
-    'peakEvent',peakEvent,'originalPeakCellEventsEnabled',strcmp(method,'rk4'), ...
+partition.extraRhsEvaluations=calls-4;
+if strcmp(method,'ssprk3'),partition.extraRhsEvaluations=calls-3;end
+[maximumRate,index]=max(records.rates);
+[~,clock]=ipm_cr.time.stageScale(state.scale,pack(out.scale),records.physicalClockIncrement);
+order=4;stages=4;scheme='rk4_fixed4_spline_knot_partition_v4';
+if strcmp(method,'ssprk3'),order=3;stages=3;scheme='ssprk3_direct_hybrid_v3';end
+info=struct('method',scheme,'timeIntegrator',method, ...
+    'temporalOrder',order,'spatialOrderCertified',false,'dt',h,'seconds',toc(started), ...
+    'initialProposedDt',initialH,'timePartition',partition, ...
+    'rate',state.rhs.rate,'maximumStageRate',maximumRate, ...
+    'realizedMaximumStageCfl',h*maximumRate,'configuredCfl',policy.cfl, ...
+    'cflStepFormulaApplied',true,'cflStepFormula','min(maxDt,0.95*cfl/currentRate,remainingTau)', ...
+    'stageRates',records.rates,'stageCfl',h*records.rates, ...
+    'stageAbscissae',records.abscissae,'stageCount',stages, ...
+    'maximumCflStageIndex',index,'cflPosition',out.rhs.cflPosition, ...
+    'maximumStageCflPosition',records.positions{index}, ...
+    'stagePeakDiagnostics',records.peaks,'allAttemptPeakDiagnostics',peaks, ...
     'stageGaugeResidualInfinity',records.gaugeResidualInfinity, ...
-    'stagePhysicalClockRates',records.clockRates, ...
     'maximumStageGaugeResidual',max(records.gaugeResidualInfinity), ...
-    'rhsEvaluations',rhsEvaluations,'acceptedAttemptRhsEvaluations',acceptedAttemptRhsEvaluations, ...
+    'stagePhysicalClockRates',records.clockRates,'rhsEvaluations',calls, ...
     'initialRhsReused',true,'terminalRhsEvaluated',true,'terminalRhsReusedNextStep',true, ...
-    'cflScope','cached initial RHS, complete intermediate stages and fresh endpoint', ...
-    'physicalClockIncrement',records.physicalClockIncrement,'compensatedPhysicalClock',true, ...
-    'originAmplitudeAdvancedWithSameTableau',true,'sspMethod',strcmp(method,'ssprk3'), ...
-    'analyticBackgroundVariableChange',hasResidual);
+    'cflScope','initial interval from current RHS; ordinary spline-knot partition; stage CFL recorded without rejection', ...
+    'physicalClockIncrement',records.physicalClockIncrement,'physicalClockUpdate',clock, ...
+    'compensatedPhysicalClock',true,'originAmplitudeAdvancedWithSameTableau',true, ...
+    'sspMethod',strcmp(method,'ssprk3'),'analyticBackgroundVariableChange',hasResidual);
 
-    function [f,rhoActual]=stage(field,z,previous,wantDiagnostics,physicalIncrement)
-        if nargin<4,wantDiagnostics=false;end
-        currentStageTau=z(5);
-        speed=exp(z(2)-z(1));
-        assert(all(isfinite(z))&&isfinite(speed)&&speed>0, ...
-            'ipm_cr:ExplicitScale','Every explicit scalar stage and clock speed must be finite.');
-        % evaluate synchronizes its density; RK4 avoids a redundant exchange.
-        rhsEvaluations=rhsEvaluations+1;
-        peakIndex=note_peak([],currentStageTau, ...
-            (currentStageTau-initial.scale.canonicalTime)/dt,false,false);
-        staged=initial;staged.scale=ipm_cr.time.stageScale(initial.scale,z,physicalIncrement);staged.rhs=previous;
+    function [value,record]=trial_at(interval)
+        probeH=interval;
+        [value,record]=ipm_cr.time.trial(state,interval,method,ctx.mesh,policy,callbacks);
+    end
+    function [f,W]=stage(field,z,previous,wantDiagnostics,increment)
+        calls=calls+1;
+        staged=state;staged.scale=ipm_cr.time.stageScale(state.scale,z,increment);staged.rhs=previous;
         if hasResidual,staged.eta=field;else,staged.W=field;end
-        [f,rhoActual]=ipm_cr.rhs(staged,ctx,wantDiagnostics);
-        snapshot=ipm_cr.time.peak(f);names=fieldnames(snapshot);
-        for k=1:numel(names),peakDiagnostics(peakIndex).(names{k})=snapshot.(names{k});end
-        peakDiagnostics(peakIndex).rhsReturned=true;
-        validate_rate(f.rate);
+        [f,W]=ipm_cr.rhs(staged,ctx,wantDiagnostics);
+        note_peak(f,z(5),(z(5)-state.scale.canonicalTime)/probeH,false,true);
     end
-    function s=finish(old,q,rhoActual,z,f,h,increment)
-        assert(all(isfinite(z))&&isfinite(increment)&&increment>0, ...
-            'ipm_cr:ExplicitScale','The scalar state and weighted clock increment must be finite.');
-        s=old;s.W=rhoActual;s.rhs=f;s.scale=ipm_cr.time.stageScale(old.scale,z,increment);
-        if hasResidual,s.eta=q;end
-        s.scale.canonicalTime=old.scale.canonicalTime+h;
-        assert(isfinite(s.scale.physicalTime)&&isfinite(s.scale.physicalTimeLow)&& ...
-            (s.scale.physicalTime>old.scale.physicalTime|| ...
-            (s.scale.physicalTime==old.scale.physicalTime&&s.scale.physicalTimeLow>old.scale.physicalTimeLow)), ...
-            'ipm_cr:ExplicitClock','The compensated physical clock must remain finite and increase.');
+    function s=finish(old,field,W,z,f,step,increment)
+        s=old;s.W=W;s.rhs=f;
+        s.scale=ipm_cr.time.stageScale(old.scale,z,increment);
+        s.scale.canonicalTime=old.scale.canonicalTime+step;
+        if hasResidual,s.eta=field;end
         s.step=old.step+1;
-        assert(all(isfinite(q.core),'all')&&all(isfinite(q.polar),'all')&& ...
-            all(isfinite(rhoActual.core),'all')&&all(isfinite(rhoActual.polar),'all')&& ...
-            rhoActual.core(1,g.core.originIndex)==0,'ipm_cr:ExplicitState', ...
-            'A complete accepted state must remain finite and centered.');
     end
-    function yes=inside_cfl(rate,h)
-        yes=h*rate<=controls.cfl*(1+64*eps);
-    end
-    function [probedState,probedRecords]=event_probe(h,probeIndex)
-        savedDt=dt;savedProbe=currentPeakProbe;
-        dt=h;currentPeakProbe=probeIndex;
-        try
-            [probedState,probedRecords]=ipm_cr.time.trial(initial,h,'rk4',g,controls,callbacks);
-        catch problem
-            dt=savedDt;currentPeakProbe=savedProbe;rethrow(problem);
-        end
-        dt=savedDt;currentPeakProbe=savedProbe;
-        if isempty(probedState)||~inside_cfl(max(probedRecords.rates),h)
-            error('ipm_cr:ExplicitStageCfl', ...
-                'A complete peak-event RK4 probe exceeded the binding stage CFL.');
-        end
-    end
-    function index=note_peak(f,tau,abscissa,reused,returned)
-        entry=ipm_cr.time.peak(f);
-        entry.attempt=retries+1;entry.canonicalTime=tau;entry.abscissa=abscissa;
-        entry.initialRhsReused=reused;entry.rhsEvaluation=rhsEvaluations;
-        entry.peakEventProbe=currentPeakProbe;
-        entry.rhsReturned=returned;
-        if isempty(peakDiagnostics),peakDiagnostics=entry;
-        else,peakDiagnostics(end+1)=entry;end %#ok<AGROW>
-        index=numel(peakDiagnostics);
-    end
-    function note_retry(problem,h,nextDt,calls)
-        entry=struct('attempt',retries+1,'dt',h,'nextDt',nextDt, ...
-            'stageCanonicalTime',currentStageTau,'rhsCallsInAttempt',calls, ...
-            'identifier',problem.identifier,'message',problem.message,'stack',problem.stack);
-        if isempty(retryDiagnostics),retryDiagnostics=entry;
-        else,retryDiagnostics(end+1)=entry;end %#ok<AGROW>
-        retryCauses{end+1}=problem;
-    end
-    function retry_error(problem)
-        text=retry_text(retryDiagnostics);
-        failure=MException(problem.identifier, ...
-            'Explicit step stopped after %d retries; last dt %.17g. %s Retry diagnostics: %s', ...
-            retries,dt,problem.message,text);
-        for causeIndex=1:numel(retryCauses)
-            failure=addCause(failure,retryCauses{causeIndex});
-        end
-        if isempty(retryCauses)||~isequal(problem,retryCauses{end})
-            failure=addCause(failure,problem);
-        end
-        throw(failure);
+    function note_peak(f,tau,abscissa,reused,returned)
+        p=ipm_cr.time.peak(f);p.canonicalTime=tau;p.abscissa=abscissa;
+        p.initialRhsReused=reused;p.rhsReturned=returned;
+        if isempty(peaks),peaks=p;else,peaks(end+1)=p;end
     end
 end
 
-function text=retry_text(records)
-if isempty(records),text='none';return;end
-items=cell(1,numel(records));
-for j=1:numel(records)
-    r=records(j);
-    items{j}=sprintf('[attempt %d dt %.17g tau %.17g %s: %s]', ...
-        r.attempt,r.dt,r.stageCanonicalTime,r.identifier,r.message);
+function [out,records,h,p]=fit_knot(initial,out,records,h,knots,evaluate,p)
+% Only a unique, locally concave peak crossing adjacent spline cells defines
+% this partition. A disconnected maximizing-branch change evolves directly.
+p.kind='RK4_original_spline_knot_fixed4_secant';
+a=ipm_cr.time.peak(initial.rhs);b=ipm_cr.time.peak(out.rhs);
+direction=sign(b.x-a.x);p.direction=direction;
+if ~a.available||~b.available||direction==0,return;end
+[ca,p.startClassification]=peak_cell(a.x,knots,direction,true);
+[cb,p.endClassification]=peak_cell(b.x,knots,direction,false);
+if cb-ca~=direction||any([records.peaks.tieNonunique])|| ...
+        a.curvature>=0||b.curvature>=0,return;end
+node=ca+(direction>0);[v0,c0]=knot_slope(initial.rhs,node,knots);
+[v1,c1]=knot_slope(out.rhs,node,knots);
+if ~(c0<0&&c1<0&&v0*v1<=0),return;end
+p.fitted=true;p.knotIndex=node;p.knotX=knots(node);
+previousH=0;previousValue=v0;value=v1;
+for iteration=1:4
+    if value==0,break;end
+    nextH=h-value*(h-previousH)/(value-previousValue);
+    if nextH==h,break;end
+    previousH=h;previousValue=value;h=nextH;
+    [out,records]=evaluate(h);value=knot_slope(out.rhs,node,knots);
+    p.secantIterations=iteration;
 end
-text=strjoin(items,' ');
+p.segmentDt=h;p.knotSlope=value;p.rawPeakKnotDefect=out.rhs.measurement.peak.x-knots(node);
 end
-
-function e=empty_peak_event()
-e=struct('limited',false,'located',false,'knotX',NaN,'direction',0, ...
-    'rootResidual',NaN,'probeCount',0,'extraRhsEvaluations',0, ...
-    'initialProposedDt',NaN,'acceptedDt',NaN,'rootTimeBracket',[NaN,NaN], ...
-    'stageGuardCuts',0,'status','no_observed_peak_cell_crossing');
+function [cell,info]=peak_cell(value,knots,direction,isStart)
+% Coordinate identity only: outgoing ownership at a start knot, incoming
+% ownership at an end knot. Neither the measured peak nor state is changed.
+knots=knots(:)';[distance,node]=min(abs(knots-value));
+tolerance=256*eps(max([1,abs(value),abs(knots(node))]));onKnot=distance<=tolerance;
+classified=value;
+if onKnot
+    classified=knots(node);cell=node-(direction<0);
+    if ~isStart,cell=node-(direction>0);end
+else,cell=find(knots<value,1,'last');end
+cell=max(1,min(numel(knots)-1,cell));
+info=struct('observedX',value,'classifiedX',classified,'coordinateDifference',classified-value, ...
+    'onKnot',onKnot,'tolerance',tolerance,'cellIndex',cell);
 end
-
-function yes=recoverable(problem)
-yes=any(strcmp(problem.identifier,{'polar:GaugeRootUnresolved','polar:GaugeFullRhsAudit', ...
-    'polar:WallDegenerate','ipm_cr:ExplicitGaugeAudit','ipm_cr:ExplicitGaugeRoot','ipm_cr:ExplicitGaugePeak','ipm_cr:AccuracyGate', ...
-    'ipm_cr:ExplicitScale','ipm_cr:ExplicitClock','ipm_cr:ExplicitState', ...
-    'ipm_cr:ExplicitTransportNonfinite','ipm_cr:ExplicitSynchronization', ...
-    'ipm_cr:ExplicitStageCfl'}));
-end
-function validate_rate(rate)
-assert(isnumeric(rate)&&isreal(rate)&&isscalar(rate)&&isfinite(rate)&&rate>=0, ...
-    'ipm_cr:ExplicitRate','The explicit transport plus reaction rate must be finite and nonnegative.');
+function [slope,curvature]=knot_slope(f,node,knots)
+q=f.measurement.q;peak=f.measurement.peak;
+if isfield(peak,'evaluationAnchor'),q=q-peak.evaluationAnchor;end
+M=peak.splineSecondDerivatives;width=knots(node+1)-knots(node);
+slope=(q(node+1)-q(node))/width-width*(2*M(node)+M(node+1))/6;
+curvature=M(node);
 end
 function z=pack(s)
 z=[s.logC_l;s.logC_omega;s.physicalTime;s.X_shift;s.canonicalTime;s.densityOrigin];

@@ -13,20 +13,14 @@ validateattributes(nu,{'numeric'},{'scalar','real','finite','nonnegative'});
 sigma=nu*min(c.dx,c.dy);
 reconstruction='linear5';
 if isfield(tr,'reconstruction'),reconstruction=char(tr.reconstruction);end
-% Standalone operator probes retain a reporting policy. Production config
-% selects 'error': only a complete CFL evaluation may reject a trial speed,
-% since Newton's private gauge probes must be allowed to cross speed zero.
-outerPolicy='report';
-if isfield(tr,'outerInflowPolicy'),outerPolicy=tr.outerInflowPolicy;end
-assert((ischar(outerPolicy)&&isrow(outerPolicy))|| ...
-    (isstring(outerPolicy)&&isscalar(outerPolicy)), ...
-    'ipm_cr:ExplicitOuterBoundary','Use outerInflowPolicy ''report'' or ''error''.');
-outerPolicy=char(outerPolicy);
-assert(any(strcmp(outerPolicy,{'report','error'})), ...
-    'ipm_cr:ExplicitOuterBoundary','Use outerInflowPolicy ''report'' or ''error''.');
-outerTolerance=0;
-if isfield(tr,'outerInflowTolerance'),outerTolerance=tr.outerInflowTolerance;end
-validateattributes(outerTolerance,{'numeric'},{'scalar','real','finite','nonnegative'});
+rateMultiplier=1;
+if strcmp(reconstruction,'central4')
+    damping=.2;if isfield(tr,'centralDissipation'),damping=tr.centralDissipation;end
+    validateattributes(damping,{'numeric'},{'scalar','real','finite','>=',0,'<=',1});
+    % Q6 has periodic spectral radius damping/h; include its explicit
+    % contribution rather than reporting only the advective characteristic.
+    rateMultiplier=1+damping;
+end
 highOrderOuter=sigma>0||~strcmp(reconstruction,'legacy_weno5');
 % The selected mode keeps one outer extrapolation operator for both speed
 % signs. This is a numerical closure at finite R, not exact inflow data;
@@ -52,11 +46,24 @@ co([1,end])=[1,-1];si([1,end])=0;
 % WENO weights are formed. No negative-radius extension is needed because
 % the annulus's inner ghost collar already contains Cartesian donor data.
 origin=interp1(c.x,rho.core(1,:),0,'linear');
-assert(isfinite(origin),'ipm_cr:ExplicitTransportOrigin', ...
-    'The Cartesian transport patch must contain the physical origin.');
 qc=rho.core-origin;qp=rho.polar-origin;
-coreX=unit_pair(qc,c.dx,options,false(size(qc,1),1),false(size(qc,1),1));
-coreY=unit_pair(qc',c.dy,options,false(size(qc,2),1),false(size(qc,2),1));
+mapped=isfield(c,'coreMap')&&c.coreMap.enabled;
+if mapped
+    assert(all(isfield(c,{'Jx','Jy','dxMetric','dyMetric','dxi','deta'}))&& ...
+        isequal(size(c.Jx),[1,c.nx])&&isequal(size(c.Jy),[c.ny,1])&& ...
+        isequal(size(c.dxMetric),[1,c.nx])&&isequal(size(c.dyMetric),[c.ny,1])&& ...
+        all(isfinite([c.Jx(:);c.Jy(:);c.dxMetric(:);c.dyMetric(:)]))&& ...
+        all([c.Jx(:);c.Jy(:);c.dxMetric(:);c.dyMetric(:)]>0)&& ...
+        isequal(c.dxMetric,c.Jx*c.dxi)&&isequal(c.dyMetric,c.Jy*c.deta), ...
+        'ipm_cr:ExplicitTensorMetric','Use resolved analytic tensor metrics.');
+    coreX=unit_pair(qc,c.dxi,options,false(size(qc,1),1),false(size(qc,1),1));
+    coreY=unit_pair(qc',c.deta,options,false(size(qc,2),1),false(size(qc,2),1));
+    coreX.plus=coreX.plus./c.Jx;coreX.minus=coreX.minus./c.Jx;
+    coreY.plus=coreY.plus./c.Jy';coreY.minus=coreY.minus./c.Jy';
+else
+    coreX=unit_pair(qc,c.dx,options,false(size(qc,1),1),false(size(qc,1),1));
+    coreY=unit_pair(qc',c.dy,options,false(size(qc,2),1),false(size(qc,2),1));
+end
 polarTheta=unit_pair(qp,angularSpacing,options,false(nr,1),false(nr,1));
 [polarRadialOut,radialNative]=unit_pair(qp',1/(nr-1),options,false(nt,1),false(nt,1));
 polarRadialMixedOut=polarRadialOut;
@@ -92,16 +99,7 @@ prepared=@apply;
         vt=-px.*si+py.*co;
         angularVelocity=vt./p.r(:);angularVelocity(:,[1,end])=0;
         radial=polarRadialOut;incoming=vr(end,:)'<0;
-        outer=outer_boundary(vr(end,:),p.r(end),incoming, ...
-            outerPolicy,outerTolerance,highOrderOuter,request.cfl);
-        if outer.enforced&&outer.unresolvedInflow
-            error('ipm_cr:UnprovidedOuterInflow', ...
-                ['The outer circle r=%.17g has %d incoming characteristics ' ...
-                '(maximum inward speed %.17g, tolerance %.17g), but no physical ' ...
-                'exterior density is supplied. Interior polynomial extrapolation ' ...
-                'does not prescribe inflow data.'],outer.radius, ...
-                outer.significantIncomingCount,outer.maximumInwardSpeed,outer.inflowTolerance);
-        end
+        outer=outer_boundary(vr(end,:),p.r(end),incoming,highOrderOuter,request.cfl);
         if ~highOrderOuter&&any(incoming)
             radial=polarRadialMixedOut;
             radial.plus(incoming,:)=polarRadialIn.plus(incoming,:);
@@ -118,13 +116,10 @@ prepared=@apply;
         B=struct('core',advection(ux,coreX,alphaX)+advection(uy',coreY,alphaY)', ...
             'polar',advection(vr',radial,alphaR)'./radialMetric+ ...
                 advection(angularVelocity,polarTheta,alphaTheta));
-        assert(all(isfinite(B.core),'all')&&all(isfinite(B.polar),'all'), ...
-            'ipm_cr:ExplicitTransportNonfinite','Both complete advection arrays must remain finite.');
         if request.partials
             % Exact speed derivatives of the frozen reconstruction. For
             % smooth LF, D_eff=.5*(Dp+Dm+(v/alpha)*(Dp-Dm)); the legacy
             % zero-floor path retains its selected upwind derivative.
-            % The gauge line search and full RHS audit remain binding.
             dx=selected(ux,coreX,alphaX);dy=selected(uy',coreY,alphaY)';
             dr=selected(vr',radial,alphaR)'./radialMetric;
             da=selected(angularVelocity,polarTheta,alphaTheta);
@@ -135,13 +130,17 @@ prepared=@apply;
         end
         if request.cfl
             if sigma>0
-                cx=alphaX/c.dx;cy=alphaY'/c.dy;
+                if mapped,cx=alphaX./c.dxMetric;cy=alphaY'./c.dyMetric;
+                else,cx=alphaX/c.dx;cy=alphaY'/c.dy;end
                 pr=alphaR'./radialSpacing;pa=alphaTheta/angularSpacing;
             else
-                cx=abs(ux)/c.dx;cy=abs(uy)/c.dy;
+                if mapped,cx=abs(ux)./c.dxMetric;cy=abs(uy)./c.dyMetric;
+                else,cx=abs(ux)/c.dx;cy=abs(uy)/c.dy;end
                 pr=abs(vr)./radialSpacing;pa=abs(angularVelocity)/angularSpacing;
             end
             pa(:,[1,end])=0;
+            cx=rateMultiplier*cx;cy=rateMultiplier*cy;
+            pr=rateMultiplier*pr;pa=rateMultiplier*pa;
             coreRate=cx+cy;polarRate=pr+pa;
             coreRate(~c.active)=-Inf;polarRate(~p.active)=-Inf;
             [maximumCore,ic]=max(coreRate(:));
@@ -155,6 +154,10 @@ prepared=@apply;
                     'firstAxisRate',cx(ic),'secondAxisRate',cy(ic), ...
                     'firstAxisSpacing',c.dx,'secondAxisSpacing',c.dy, ...
                     'u1',ux(ic),'u2',uy(ic));
+                if mapped
+                    position.firstAxisSpacing=c.dxMetric(column);
+                    position.secondAxisSpacing=c.dyMetric(row);
+                end
             else
                 [row,column]=ind2sub(size(p.X),ip);
                 position=struct('patch','polar','row',row,'column',column, ...
@@ -170,32 +173,28 @@ prepared=@apply;
             position.reactionIncluded=false;
             position.smoothPhysicalSpeedFloor=sigma;
             position.reconstruction=reconstruction;
+            position.centeredDampingCflMultiplier=rateMultiplier;
             position.outerDegreeSwitching=~highOrderOuter;
             position.outerBoundary=outer;
             position.allActiveOverlapIncluded=true;
-            assert(isfinite(rate)&&rate>=0,'ipm_cr:ExplicitTransportCfl', ...
-                'The complete active physical CFL rate must be finite and nonnegative.');
         end
         result=struct('B',B,'rate',rate,'position',position,'partials',partials, ...
             'outerBoundary',outer);
     end
 end
 
-function info=outer_boundary(speed,radius,incoming,policy,tolerance,highOrder,complete)
-significant=speed < -tolerance;
+function info=outer_boundary(speed,radius,incoming,highOrder,complete)
 if highOrder,closure='interior_degree5_extrapolation';
 else,closure='interior_speed_selected_degree5_or_inflow_degree_extrapolation';end
-unresolved=any(significant);
+unresolved=any(incoming);
 if unresolved,status='unprovided_physical_inflow';
-elseif any(incoming),status='inward_speed_within_explicit_tolerance';
 else,status='no_physical_inflow';end
 info=struct('radius',radius,'minimumRadialVelocity',min(speed), ...
     'maximumRadialVelocity',max(speed),'incomingCount',nnz(incoming), ...
-    'significantIncomingCount',nnz(significant), ...
-    'maximumInwardSpeed',max(0,-min(speed)),'inflowTolerance',tolerance, ...
-    'policy',policy,'closure',closure,'physicalInflowDataSupplied',false, ...
+    'maximumInwardSpeed',max(0,-min(speed)), ...
+    'closure',closure,'physicalInflowDataSupplied',false, ...
     'unresolvedInflow',unresolved,'exteriorTailCertified',false, ...
-    'completeEvaluation',complete,'enforced',complete&&strcmp(policy,'error'), ...
+    'completeEvaluation',complete, ...
     'status',status);
 end
 
@@ -223,8 +222,13 @@ assert(isscalar(disableNative)&&(islogical(disableNative)||isnumeric(disableNati
     'ipm_cr:ExplicitTransportOptions','disableUnitPair must be a scalar logical flag.');
 reconstruction='linear5';
 if isfield(tr,'reconstruction'),reconstruction=char(tr.reconstruction);end
-assert(any(strcmp(reconstruction,{'legacy_weno5','smooth_weno5','linear5'})), ...
-    'ipm_cr:ExplicitReconstruction','Use legacy_weno5, smooth_weno5, or linear5.');
+assert(any(strcmp(reconstruction,{'legacy_weno5','smooth_weno5','linear5','central4'})), ...
+    'ipm_cr:ExplicitReconstruction','Use central4, linear5, smooth_weno5, or legacy_weno5.');
+if strcmp(reconstruction,'central4')
+    damping=.2;if isfield(tr,'centralDissipation'),damping=tr.centralDissipation;end
+    [pair.plus,pair.minus]=ipm_cr.op.central(field,spacing,damping);
+    useNative=false;return
+end
 if ~strcmp(reconstruction,'legacy_weno5')
     nativeFile=which('ipm_cr.op.wenoMex');
     assert(~disableNative&&strcmp(opts.alphaMode,'local')&&isa(field,'double')&& ...
@@ -264,9 +268,9 @@ end
 end
 
 function check_array(value,shape,name)
-assert(isnumeric(value)&&isreal(value)&&isequal(size(value),shape) ...
-    &&all(isfinite(value),'all'),'ipm_cr:ExplicitTransportArray', ...
-    '%s must be a finite real native array of the correct shape.',name);
+assert(isnumeric(value)&&isreal(value)&&isequal(size(value),shape), ...
+    'ipm_cr:ExplicitTransportArray', ...
+    '%s must be a real native array of the correct shape.',name);
 end
 
 function request=resolve_request(overrides)

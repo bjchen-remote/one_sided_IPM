@@ -1,16 +1,25 @@
-function M=localMap(nodes,queries,width)
+function M=localMap(nodes,queries,width,extrapolate)
 %LOCALMAP Sparse local polynomial value map on arbitrary increasing nodes.
 % Barycentric weights use the actual local nodes after translation/scaling;
 % Chebyshev endpoint weights are inapplicable to the stretched carrier axis.
+% EXTRAPOLATE explicitly continues the nearest endpoint polynomial. The
+% default forbids extrapolation; remesh uses this continuation to retain
+% each independently evolved patch when its active boundary moves.
+if nargin<4,extrapolate=false;end
+validateattributes(extrapolate,{'logical'},{'scalar'});
 nodes=nodes(:);queries=queries(:);n=numel(nodes);nq=numel(queries);
 assert(all(isfinite(nodes))&&all(diff(nodes)>0)&&all(isfinite(queries))&& ...
     width<=n,'ipm_cr:CarrierInterpolation','Finite increasing interpolation axes are required.');
 lowerTolerance=64*eps(max(1,abs(nodes(1))));
 upperTolerance=64*eps(max(1,abs(nodes(end))));
-assert(all(queries>=nodes(1)-lowerTolerance&queries<=nodes(end)+upperTolerance), ...
-    'ipm_cr:CarrierInterpolation','Local source interpolation cannot extrapolate.');
-queries=max(nodes(1),min(nodes(end),queries));
-nearest=interp1(nodes,(1:n)',queries,'nearest');
+if ~extrapolate
+    assert(all(queries>=nodes(1)-lowerTolerance&queries<=nodes(end)+upperTolerance), ...
+        'ipm_cr:CarrierInterpolation','Local source interpolation cannot extrapolate.');
+    queries=max(nodes(1),min(nodes(end),queries));
+end
+% Clip only the stencil selector when extending; evaluate at the actual
+% query, rather than flattening the continued field at the old boundary.
+nearest=interp1(nodes,(1:n)',max(nodes(1),min(nodes(end),queries)),'nearest');
 first=max(1,min(n-width+1,nearest-floor(width/2)));
 columns=first+(0:width-1);weights=zeros(nq,width);
 for k=1:nq

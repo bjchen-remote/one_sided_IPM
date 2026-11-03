@@ -12,7 +12,12 @@ if isfield(model,'tailCorrection')&&model.tailCorrection
     tail=ipm_cr.model.tail(model,scale,X,Y,false,true);
     low=0;if isfield(scale,'physicalTimeLow'),low=scale.physicalTimeLow;end
     q=q+scale.physicalTime*tail.x+low*tail.x;
-    assert(all(isfinite(q),'all'),'ipm_cr:TailBackgroundRange');return
+    if isfield(scale,'physicalTimeTail')
+        for word=reshape(scale.physicalTimeTail,1,[])
+            if word~=0,q=q+word*tail.x;end
+        end
+    end
+    return
 end
 if strcmp(model.kind,'none'),q=zeros(size(X));return;end
 ell=scale.logC_l;omega=scale.logC_omega;

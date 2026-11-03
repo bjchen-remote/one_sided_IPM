@@ -1,5 +1,5 @@
-function report=build_ipm_cr_native(outputDir,backend)
-%BUILD_IPM_CR_NATIVE Build the strict smooth-WENO/linear-optimal kernel.
+function report=build_ipm_cr_native(outputDir,backend,kernel)
+%BUILD_IPM_CR_NATIVE Build strict transport and locally anchored sampling.
 % Does not select a transport backend or change default numerical options.
 % One binary supports optional reconstructionMode=0 (linear optimal) and
 % reconstructionMode=1 (smooth WENO-Z, also the six-argument default).
@@ -12,8 +12,12 @@ function report=build_ipm_cr_native(outputDir,backend)
 % backend='clt' explicitly selects CLT. No license or global setup is changed.
 root=fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(root,'src'));
-packagePath=fullfile(root,'src','+ipm_cr','+op');
-source=fullfile(packagePath,'wenoMex.cpp');
+if nargin<3,kernel='all';end
+assert(any(strcmp(kernel,{'all','weno','sample'})),'ipm_cr:NativeBuildKernel');
+package='+op';name='wenoMex';
+if strcmp(kernel,'sample'),package='+mesh';name='sampleMex';end
+packagePath=fullfile(root,'src','+ipm_cr',package);
+source=fullfile(packagePath,[name,'.cpp']);
 assert(isfile(source),'ipm_cr:NativeBuildSource','Missing native source.');
 if nargin<1||isempty(outputDir)
     results=fullfile(root,'results');
@@ -35,7 +39,7 @@ clt='/Library/Developer/CommandLineTools/usr/bin/clang++';
 if strcmp(backend,'auto')
     if ismac&&isfile(clt),selectedBackend='clt';else,selectedBackend='mex';end
 end
-args={'-R2018a','-outdir',packagePath,'-output','wenoMex',source};
+args={'-R2018a','-outdir',packagePath,'-output',name,source};
 if ~ispc
     args{end+1}='CXXFLAGS=$CXXFLAGS -fno-fast-math -ffp-contract=off';
 end
@@ -49,7 +53,7 @@ report=struct('kind','optional_smooth_weno_native_build_v3','status','running', 
     'transportDefaultChanged',false,'sourceUnchangedDuringBuild',false);
 timer=tic;
 try
-    clear ipm_cr.op.wenoMex
+    clear ipm_cr.op.wenoMex ipm_cr.mesh.sampleMex
     if strcmp(selectedBackend,'clt')
         [report,buildStatus]=build_clt(report,clt,outputDir,source);
         assert(buildStatus==0,'ipm_cr:NativeBuildCLT', ...
@@ -81,7 +85,7 @@ try
     report.sourceUnchangedDuringBuild=strcmp(report.sourceSha256,ipm_cr.io.sha(source));
     assert(report.sourceUnchangedDuringBuild,'ipm_cr:NativeBuildSourceChanged', ...
         'Native source changed during compilation; this build is not source-pinned.');
-    binary=fullfile(packagePath,['wenoMex.',mexext]);
+    binary=fullfile(packagePath,[name,'.',mexext]);
     if strcmp(selectedBackend,'clt')
         assert(strcmp(report.versionSourceSha256,ipm_cr.io.sha(report.versionSource))&& ...
             strcmp(report.exportMapSha256,ipm_cr.io.sha(report.exportMap)), ...
@@ -91,6 +95,10 @@ try
     end
     assert(isfile(binary),'ipm_cr:NativeBuildMissing','MEX did not produce the expected binary.');
     report.binary=binary;report.binarySha256=ipm_cr.io.sha(binary);
+    report.kernel=name;
+    if strcmp(kernel,'all')
+        report.sampling=build_ipm_cr_native(fullfile(outputDir,'sampling'),backend,'sample');
+    end
     report.status='completed';report.elapsedSeconds=toc(timer);
     write_report(outputDir,report);
 catch problem
@@ -130,7 +138,7 @@ report.exportMap=exportMap;report.exportMapSha256=ipm_cr.io.sha(exportMap);
 report.apiContract=struct('defaultRelease','R2018a','interleavedComplex',true, ...
     'macroDefinition','matrix.h derives MX_HAS_INTERLEAVED_COMPLEX from the R2018a target API; it is not redundantly overridden.', ...
     'versionEntryPoint','mexfilerequiredapiversion from the installed cpp_mexapi_version.cpp');
-report.stagedBinary=fullfile(folder,['wenoMex.',mexext]);
+[~,name]=fileparts(source);report.stagedBinary=fullfile(folder,[name,'.',mexext]);
 commandArgs={compiler,'-arch',architecture,['-mmacosx-version-min=',deployment], ...
     '-isysroot',sdk,'-std=c++14','-stdlib=libc++','-O2','-DNDEBUG','-fexceptions', ...
     '-fno-common','-fwrapv','-fno-fast-math','-ffp-contract=off', ...

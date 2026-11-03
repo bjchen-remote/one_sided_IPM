@@ -30,28 +30,36 @@ else
         'skewWeight',p.gaussianSkewWeight,'tailCorrection',true);
 end
 transport=cfg.transport;transport.reconstruction='linear5';transport.smoothSpeedCoefficient=.1;
-transport.outerInflowPolicy='error';transport.outerInflowTolerance=0;
-opts=struct('geometry',struct(),'solverOptions',struct('coreDegree',[48,48], ...
+transport.centralDissipation=.2;
+opts=struct('geometry',struct('preset','medium'),'solverOptions',struct('coreDegree',[48,48], ...
     'angularDegree',64,'polarDegree',16,'rOuter',1e10), ...
-    'transport',transport,'cfl',.3,'maxDt',.2,'minDt',1e-10, ...
-    'timeIntegrator','rk4','background',cfg.background,'initial',cfg.manifestFile);
+    'transport',transport,'cfl',.3,'maxDt',.2, ...
+    'timeIntegrator','rk4','background',cfg.background,'initial',cfg.manifestFile, ...
+    'poissonBackend','fem','fdOptions',struct(),'femOptions',struct(), ...
+    'remesh',struct('enabled',true));
 overrides=aliases(overrides);
 names=fieldnames(overrides);
 for k=1:numel(names)
     name=names{k};assert(isfield(opts,name),'ipm_cr:Config','Unknown numerical option %s.',name);
-    opts.(name)=overrides.(name);
+    if strcmp(name,'transport')
+        opts.transport=merge(opts.transport,overrides.transport);
+    else,opts.(name)=overrides.(name);end
 end
-for name={'cfl','maxDt','minDt'}
+for name={'cfl','maxDt'}
     validateattributes(opts.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
 end
-assert(opts.minDt<=opts.maxDt,'ipm_cr:Config','minDt must not exceed maxDt.');
 opts.timeIntegrator=char(validatestring(opts.timeIntegrator,{'rk4','ssprk3'}));
+assert(((ischar(opts.poissonBackend)&&isrow(opts.poissonBackend))|| ...
+    (isstring(opts.poissonBackend)&&isscalar(opts.poissonBackend)))&& ...
+    any(strcmp(opts.poissonBackend,{'spectral','same_mesh_fd','fem'})), ...
+    'ipm_cr:PoissonBackend','Use spectral, same_mesh_fd, or the experimental fem backend.');
+opts.poissonBackend=char(opts.poissonBackend);
+validate_fd_options(opts.fdOptions);
+opts.femOptions=ipm_cr.poisson.fem.options(opts.femOptions);
+opts.remesh=ipm_cr.remesh('config',opts.remesh);
 for name={'geometry','solverOptions','transport','background'}
     assert(isstruct(opts.(name{1}))&&isscalar(opts.(name{1})),'ipm_cr:Config','Use scalar module options.');
 end
-% A partial transport override must not silently disable the production gate.
-if ~isfield(opts.transport,'outerInflowPolicy'),opts.transport.outerInflowPolicy='error';end
-if ~isfield(opts.transport,'outerInflowTolerance'),opts.transport.outerInflowTolerance=0;end
 if sampled
     assert(isfield(opts.background,'kind')&&strcmp(opts.background.kind,'none'), ...
         'ipm_cr:SampledBackground','A sampled density requires background.kind=''none''; no analytic background is defined.');
@@ -66,20 +74,18 @@ end
 
 function c=case_defaults()
 c=struct('format','ipm_cr_case_v1','initial','data/initial.json', ...
-    'domain',struct('rmax',1e10),'method',struct(),'run',run_defaults(), ...
+    'domain',struct('rmax',1e10),'method',struct('geometry',struct('preset','medium')),'run',run_defaults(), ...
     'stop',stop_defaults(),'save',struct('data',true,'history',true,'label',''));
 end
 
 function r=run_defaults()
 r=struct('outputDir',fullfile(pwd,'result'),'tauEnd',200,'wallSeconds',600, ...
     'checkpointEveryTau',1,'checkpointWallSeconds',60,'logEveryTau',1, ...
-    'maxSteps',2000000,'resume',true,'verbose',true,'rethrowOnFailure',true);
+    'maxSteps',2000000,'resume',true,'verbose',true,'rethrowOnFailure',true,'seed',[]);
 end
 
 function s=stop_defaults()
-s=struct('physicalTime',[],'steady',struct('enabled',false,'residualTol',1e-6, ...
-    'changeTol',1e-5,'windowTau',10,'windows',3,'sampleEveryTau',1, ...
-    'minTau',0,'nearRadius',3,'bodyRadius',200));
+s=struct('physicalTime',[]);
 end
 
 function [opts,requested]=run_options(input)
@@ -98,7 +104,7 @@ if isCase
     radius=1e10;
     if isfield(input,'domain'),allowed(input.domain,{'rmax'});radius=input.domain.rmax;end
     validateattributes(radius,{'numeric'},{'scalar','real','finite','positive'});
-    if ~isfield(requested,'geometry'),requested.geometry=struct();end
+    if ~isfield(requested,'geometry'),requested.geometry=struct('preset','medium');end
     if ~isfield(requested.geometry,'grid'),requested.geometry.grid=struct();end
     if ~isfield(requested,'solverOptions'),requested.solverOptions=struct();end
     if isfield(requested.geometry.grid,'rmax')
@@ -111,7 +117,8 @@ if isCase
 else
     % Compatibility exists at this one boundary, never in run/init loops.
     names=fieldnames(input);method={'geometry','solverOptions','transport','cfl', ...
-        'maxDt','minDt','timeIntegrator','background','initial','mesh','poisson'};
+        'maxDt','timeIntegrator','background','initial','mesh','poisson', ...
+        'poissonBackend','fdOptions','femOptions','remesh'};
     if isfield(input,'explicitOptions'),requested=aliases(input.explicitOptions);end
     direct=struct();
     for k=1:numel(names)
@@ -131,7 +138,6 @@ else
 end
 if isfield(input,'stop')
     value=input.stop;
-    if isfield(value,'steady'),stop.steady=merge(stop.steady,value.steady);value=rmfield(value,'steady');end
     stop=merge(stop,value);
 end
 if isfield(input,'save'),save=merge(save,input.save);end
@@ -145,16 +151,18 @@ for name={'tauEnd','wallSeconds','checkpointEveryTau','checkpointWallSeconds','l
 end
 validateattributes(opts.maxSteps,{'numeric'},{'scalar','real','finite','integer','positive'});
 for name={'resume','verbose','rethrowOnFailure'},flag(opts.(name{1}));end
+if ~isempty(opts.seed)
+    allowed(opts.seed,{'file','sha256','tau'});
+    assert(all(isfield(opts.seed,{'file','sha256','tau'}))&& ...
+        (ischar(opts.seed.file)||(isstring(opts.seed.file)&&isscalar(opts.seed.file)))&& ...
+        ischar(opts.seed.sha256)&&~isempty(regexp(opts.seed.sha256,'^[0-9a-f]{64}$','once')), ...
+        'ipm_cr:Seed','Supply an exact seed file, SHA256 and actual tau.');
+    validateattributes(opts.seed.tau,{'numeric'},{'scalar','real','finite','nonnegative'});
+    opts.seed.file=char(java.io.File(char(opts.seed.file)).getCanonicalPath());
+end
 if ~isempty(stop.physicalTime)
     validateattributes(stop.physicalTime,{'numeric'},{'scalar','real','finite','positive'});
 end
-st=stop.steady;flag(st.enabled);
-for name={'residualTol','changeTol','windowTau','sampleEveryTau','nearRadius','bodyRadius'}
-    validateattributes(st.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
-end
-validateattributes(st.windows,{'numeric'},{'scalar','real','finite','integer','positive'});
-validateattributes(st.minTau,{'numeric'},{'scalar','real','finite','nonnegative'});
-assert(st.bodyRadius>=st.nearRadius,'ipm_cr:StopRegions','bodyRadius must cover nearRadius.');
 flag(save.data);flag(save.history);
 assert(ischar(save.label)||(isstring(save.label)&&isscalar(save.label)), ...
     'ipm_cr:Config','save.label must be text.');
@@ -186,6 +194,25 @@ end
 
 function flag(value)
 validateattributes(value,{'logical'},{'scalar'});
+end
+
+function validate_fd_options(options)
+assert(isstruct(options)&&isscalar(options)&& ...
+    all(ismember(fieldnames(options),{'width','traceWidth','outerBoundary'})), ...
+    'ipm_cr:FDOptions','Unknown same-mesh FD option.');
+for name={'width','traceWidth'}
+    if isfield(options,name{1})
+        value=options.(name{1});
+        assert(isnumeric(value)&&isreal(value)&&isscalar(value)&&isfinite(value)&&value==7, ...
+            'ipm_cr:FDOptions','The verified FD configuration uses width=traceWidth=7.');
+    end
+end
+if isfield(options,'outerBoundary')
+    value=options.outerBoundary;
+    assert(((ischar(value)&&isrow(value))||(isstring(value)&&isscalar(value)))&& ...
+        strcmp(value,'decay'),'ipm_cr:FDOptions', ...
+        'The same-mesh backend retains source-free exterior DtN (decay).');
+end
 end
 
 function retire_origin(g)

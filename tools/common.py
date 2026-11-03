@@ -73,6 +73,8 @@ def source_files(root):
     files = [relative_file(root, p.relative_to(root).as_posix())
              for p in (root / 'src').rglob('*') if p.is_file() and p.suffix in suffixes]
     files.append(relative_file(root, 'data/initial.json'))
+    files.append(relative_file(root, 'data/mesh.json'))
+    files.append(relative_file(root, 'main.m'))
     return sorted(set(files))
 
 
@@ -121,7 +123,7 @@ def matlab_executable(requested=None):
 
 def require_kernel(root, options):
     reconstruction = options.get('transport', {}).get('reconstruction', 'linear5')
-    if reconstruction != 'legacy_weno5':
+    if reconstruction in {'linear5', 'smooth_weno5'}:
         path = root / ('src/+ipm_cr/+op/wenoMex' + mex_extension())
         if not path.is_file():
             raise RuntimeError('Build the current platform wenoMex kernel before starting a trajectory')

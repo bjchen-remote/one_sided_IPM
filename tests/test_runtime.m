@@ -65,6 +65,7 @@ ipm_cr.io.checkpoint('load',stale);
 clone=fullfile(outputDir,'project_copy');mkdir(clone);
 [ok,message]=copyfile(fullfile(root,'src'),fullfile(clone,'src'));assert(ok,'ipm_cr:RuntimeTestCopy','%s',message);
 [ok,message]=copyfile(fullfile(root,'data'),fullfile(clone,'data'));assert(ok,'ipm_cr:RuntimeTestCopy','%s',message);
+[ok,message]=copyfile(fullfile(root,'main.m'),fullfile(clone,'main.m'));assert(ok,'ipm_cr:RuntimeTestCopy','%s',message);
 assert(isequaln(source,ipm_cr.io.identity('source',clone))&& ...
     isequaln(ipm_cr.io.identity('authority'),ipm_cr.io.identity('authority',clone)), ...
     'ipm_cr:RuntimeTestProjectMove','Machine root leaked into a content identity.');

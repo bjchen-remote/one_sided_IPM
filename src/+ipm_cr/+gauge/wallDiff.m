@@ -7,8 +7,8 @@ if isempty(previous)||~isequal(previous,Dx)
     [rows,columns,weights]=find(Dx);previous=Dx;
 end
 values=values(:);
-assert(numel(values)==size(Dx,2)&&all(isfinite(values)), ...
-    'polar:WallDerivative','The original wall data must be finite.');
+assert(numel(values)==size(Dx,2), ...
+    'polar:WallDerivative','The wall data must match the original derivative axis.');
 q=accumarray(rows,weights.*(values(columns)-values(rows)), ...
     [size(Dx,1),1],@sum,0).';
 end

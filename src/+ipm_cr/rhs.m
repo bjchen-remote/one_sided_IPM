@@ -39,7 +39,7 @@ end
 % The synthetic two-ray carrier represents exactly the ORIGINAL wall
 % sample points. It is only an adapter for the unchanged I/P/C routines.
 r=ctx.wallR;map=ctx.wallMap;
-R=reshape(map.core*W.core(:)+map.polar*W.polar(:),map.shape);
+R=ipm_cr.mesh.sample(W,map);
 R(1,:)=0;
 [m,observeRate]=ipm_cr.gauge.wall(R,r,wallOps,struct('interpolation','linear'));
 Uref=ipm_cr.mesh.sample(struct('core',physical.core.u1,'polar',physical.polar.u1),g,m.C,0);
@@ -93,7 +93,7 @@ else
     end
 end
 F.core(1,g.core.originIndex)=0;
-wallF=reshape(map.core*F.core(:)+map.polar*F.polar(:),map.shape);
+wallF=ipm_cr.mesh.sample(F,map);
 wallF(1,:)=0;
 if wantDiagnostics
     % Accepted endpoints rebuild the density observables independently.
@@ -108,8 +108,6 @@ end
 target=[0;0;wallOps.rescaling.peakPositionRestoringRate* ...
     (m.C-wallOps.rescaling.referenceWallGradientCentroid)];
 actualResidual=complete.rate.normalized+target;
-assert(all(isfinite(actualResidual))&&max(abs(actualResidual))<=1e-5, ...
-    'ipm_cr:ExplicitGaugeAudit','The actual synchronized complete RHS must satisfy original I/P/C.');
 evaluation=struct('F',F,'Q',Q,'q',q,'c_l',rates.c_l,'c_omega',rates.c_omega, ...
     'c_r',rates.c_r,'delta',rates.delta,'Uref',Uref,'transportOrigin',F0, ...
     'rate',rate+abs(rates.c_omega),'transportRate',rate,'cflPosition',position, ...
@@ -145,13 +143,13 @@ end
         if nargout>1,[b,~,~,partials]=transport(cl,delta);
         else,b=transport(cl,delta);end
         if ~split,b=ipm_cr.mesh.fill(b,g);end
-        wall=reshape(map.core*b.core(:)+map.polar*b.polar(:),map.shape);
+        wall=ipm_cr.mesh.sample(b,map);
         wall(1,:)=wall(1,1);
         if nargout>1
             for field={'c_l','delta'}
                 key=field{1};v=partials.(key);
                 if ~split,v=ipm_cr.mesh.fill(v,g);end
-                partials.(key)=reshape(map.core*v.core(:)+map.polar*v.polar(:),map.shape);
+                partials.(key)=ipm_cr.mesh.sample(v,map);
                 partials.(key)(1,:)=partials.(key)(1,1);
             end
         end

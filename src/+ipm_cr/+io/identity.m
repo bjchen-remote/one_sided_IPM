@@ -14,7 +14,9 @@ switch action
                 paths{end+1}=fullfile(listing(k).folder,listing(k).name); %#ok<AGROW>
             end
         end
-        paths{end+1}=fullfile(root,'data','initial.json');paths=sort(unique(paths));
+        paths{end+1}=fullfile(root,'data','initial.json');
+        paths{end+1}=fullfile(root,'main.m');
+        paths{end+1}=fullfile(root,'data','mesh.json');paths=sort(unique(paths));
         rows=struct('path',{},'sha256',{});
         for k=1:numel(paths)
             relative=project_relative(root,paths{k});

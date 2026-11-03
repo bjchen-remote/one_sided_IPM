@@ -1,5 +1,5 @@
 function report=test_solver_gauge_integrity(outputDir)
-%TEST_SOLVER_GAUGE_INTEGRITY Root regularity, unchanged IPC and split Jacobian.
+%TEST_SOLVER_GAUGE_INTEGRITY Direct roots, IPC diagnostics and split Jacobian.
 % Frozen-state tests only: no trajectory or physical clock is advanced.
 root=fileparts(fileparts(mfilename('fullpath')));addpath(fullfile(root,'src'));
 if nargin<1,outputDir=fullfile(root,'results','solver_gauge_integrity');end
@@ -13,7 +13,7 @@ report=struct('kind','ipm_cr_gauge_integrity_v1','passed',false,'timeAdvanced',0
 try
     [R,r,ops]=wall_fixture();
     report.centeredPeak=centered_peak_test(R,r,ops);
-    report.rootGates=root_gate_test(R,r,ops);
+    report.rootDiagnostics=root_diagnostics_test(R,r,ops);
     report.finiteAxisQuadrature=quadrature_test();
     report.splitJacobian=split_jacobian_test();
     report.sourceUnchanged=isequaln(identity,ipm_cr.io.identity('source'));
@@ -26,7 +26,7 @@ catch problem
     rethrow(problem);
 end
 report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'solver_gauge_integrity.json'),report);
-fprintf('CR gauge integrity: root gates, one centered peak and split Jacobian passed (%.3fs)\n',report.seconds);
+fprintf('CR gauge integrity: direct Newton, peak diagnostics and split Jacobian passed (%.3fs)\n',report.seconds);
 end
 
 function [R,r,ops]=wall_fixture()
@@ -35,7 +35,7 @@ primitive=@(z)erf(z-.137)+.07*z;
 R=primitive(X)-primitive(0);R(1,:)=0;
 settings=struct('wallIntegralRadius',1,'referenceWallIntegral',17, ...
     'referenceWallGradientCentroid',.012,'peakPositionRestoringRate',.5, ...
-    'cOmegaGaugeFloor',1e-12,'pointStrainConditionFloor',1e-12,'pinX',.05);
+    'pinX',.05);
 ops=struct('x',x,'Dx',ipm_cr.mesh.fd(x,1,7),'rescaling',settings);
 end
 
@@ -79,9 +79,56 @@ result=struct('peakCallCount',calls,'legacyCenteredPeakBitwiseIdentical',true, .
     'referenceI',m.referenceWallIntegral,'referenceC',m.referenceWallGradientCentroid);
 end
 
-function result=root_gate_test(R,r,ops)
+function result=root_diagnostics_test(R,r,ops)
 [m,observe]=ipm_cr.gauge.wall(R,r,ops);
 ops.rescaling.referenceWallGradientCentroid=m.C;
+[P1,P2]=independent_directions(R,r,observe);target=[.25;-.4];
+base=@(cl,delta)linear_base(cl,delta,P1,P2,target);
+[rates,regular]=ipm_cr.gauge.rates(R,r,ops,base,0,[0,0],m,observe);
+assert(regular.rootCondition>=1e-12&&regular.iterations<=8&&regular.evaluations<=9&& ...
+    norm([rates.c_l;rates.delta]-target,inf)<=1e-8&& ...
+    norm(regular.auditResidual,inf)<=1e-8&&~isfield(regular,'rootConditionFloor')&& ...
+    ~isfield(regular,'fallbackUsed'),'ipm_cr:GaugeIntegrityRegular', ...
+    'The direct solve must resolve a regular known root; quality is checked by this test.');
+% Singular, ill-conditioned and nonfinite Jacobians are classified here,
+% before invoking a root algorithm on an undefined fixture.
+zeroJ=observed_jacobian(observe,zeros(size(R)),zeros(size(R)));
+illJ=observed_jacobian(observe,P1,1e-14*P2);
+overflow=(realmax/2)*repmat((-1).^(1:size(R,1))',1,size(R,2));overflow(1,:)=0;
+overflowJ=observed_jacobian(observe,overflow,P2);
+assert(all(zeroJ==0,'all')&&rcond(illJ)<1e-12&& ...
+    all(isfinite(overflow),'all')&&any(~isfinite(overflowJ),'all'), ...
+    'ipm_cr:GaugeIntegrityDiagnostics','Independent diagnostics must identify undefined or poorly conditioned inputs.');
+% Exact integer first differences make q==1 bitwise; this isolates the
+% genuinely flat maximum from a high-order stencil's last-bit noise.
+tieR=(0:4)';flat=[tieR,-tieR];tieOps=ops;tieOps.x=-4:4;
+tieOps.Dx=spdiags([-ones(9,1),ones(9,1)],[0,1],9,9);
+tieOps.Dx(9,:)=0;tieOps.Dx(9,8:9)=[-1,1];
+tieOps.rescaling.wallIntegralRadius=3;
+[tied,tiedObserve]=ipm_cr.gauge.wall(flat,tieR,tieOps);
+assert(tied.peak.tieNonunique&&~tied.peak.valueDerivativeUnique, ...
+    'ipm_cr:GaugeIntegrityTie','A flat positive gradient must expose its nonunique maximum.');
+tieOps.rescaling.referenceWallGradientCentroid=tied.C;
+[T1,T2]=independent_directions(flat,tieR,tiedObserve);
+tieBase=@(cl,delta)linear_base(cl,delta,T1,T2,[0;0]);
+[tieRates,tieInformation]=ipm_cr.gauge.rates(flat,tieR,tieOps,tieBase,0,[0,0],tied,tiedObserve);
+assert(all(isfinite([tieRates.c_l,tieRates.delta,tieRates.c_omega]))&& ...
+    norm(tieInformation.auditResidual,inf)<=1e-8, ...
+    'ipm_cr:GaugeIntegrityTieRoot','The selected maximum supplies a branch derivative without runtime rejection.');
+[undefined,undefinedObserve]=ipm_cr.gauge.wall(zeros(size(R)),r,ops);
+undefinedRate=undefinedObserve(zeros(size(R)));
+assert(undefined.integral.value==0&&undefined.centroid.energy==0&& ...
+    undefined.centroid.degenerateEnergy&&isnan(undefined.C)&& ...
+    all(isnan(undefinedRate.rate.normalized)), ...
+    'ipm_cr:GaugeIntegrityUndefined','Zero-energy IPC ratios must remain undefined, without invented zero rates.');
+result=struct('regularCondition',regular.rootCondition,'knownRoot',target, ...
+    'regularRootInformation',regular,'zeroJacobian',zeroJ,'illconditionedJacobian',illJ, ...
+    'overflowJacobian',overflowJ,'undefinedInputsClassifiedByTest',true, ...
+    'nonuniqueGlobalMaximumDiagnosed',true,'selectedBranchRootInformation',tieInformation, ...
+    'zeroEnergyCentroidUndefined',true,'globalMaximumDefinitionUnchanged',true);
+end
+
+function [P1,P2]=independent_directions(R,r,observe)
 X=[r,-r];templates={X,X.^2,X.^3,X.^4,exp(-X.^2),X.*R};
 K=zeros(2,numel(templates));
 for j=1:numel(templates)
@@ -92,40 +139,16 @@ coefficients=K'/(K*K');P1=zeros(size(R));P2=P1;
 for j=1:numel(templates)
     P1=P1+coefficients(j,1)*templates{j};P2=P2+coefficients(j,2)*templates{j};
 end
-kind='regular';
-[~,regular]=ipm_cr.gauge.rates(R,r,ops,@base,0,[0,0],m,observe);
-assert(regular.rootCondition>=regular.rootConditionFloor&&~regular.fallbackUsed, ...
-    'ipm_cr:GaugeIntegrityRegular','A regular exact root should pass without a fallback.');
-kind='zero';expect(@()ipm_cr.gauge.rates(R,r,ops,@base,0,[0,0],m,observe),'ipm_cr:ExplicitGaugeRoot');
-kind='illconditioned';expect(@()ipm_cr.gauge.rates(R,r,ops,@base,0,[0,0],m,observe),'ipm_cr:ExplicitGaugeRoot');
-kind='nonfinite';expect(@()ipm_cr.gauge.rates(R,r,ops,@base,0,[0,0],m,observe),'ipm_cr:ExplicitGaugeRoot');
-% Exact integer first differences make q==1 bitwise; this isolates the
-% genuinely flat maximum from a high-order stencil's last-bit noise.
-tieR=(0:4)';flat=[tieR,-tieR];tieOps=ops;tieOps.x=-4:4;
-tieOps.Dx=spdiags([-ones(9,1),ones(9,1)],[0,1],9,9);
-tieOps.Dx(9,:)=0;tieOps.Dx(9,8:9)=[-1,1];
-tieOps.rescaling.wallIntegralRadius=3;
-[tied,tiedObserve]=ipm_cr.gauge.wall(flat,tieR,tieOps);
-assert(tied.peak.tieNonunique&&~tied.peak.valueDerivativeUnique, ...
-    'ipm_cr:GaugeIntegrityTie','A flat positive gradient must expose its nonunique maximum.');
-expect(@()ipm_cr.gauge.rates(flat,tieR,tieOps,@base,0,[0,0],tied,tiedObserve),'ipm_cr:ExplicitGaugePeak');
-result=struct('regularCondition',regular.rootCondition,'conditionFloor',regular.rootConditionFloor, ...
-    'zeroResidualSingularRejected',true,'zeroResidualIllconditionedRejected',true, ...
-    'nonfiniteJacobianRejected',true,'nonuniqueGlobalMaximumRejected',true, ...
-    'globalMaximumDefinitionUnchanged',true);
+end
 
-    function [b,partials]=base(cl,delta)
-        a=P1;d=P2;
-        if strcmp(kind,'zero'),a(:)=0;d(:)=0;
-        elseif strcmp(kind,'illconditioned'),d=1e-14*d;end
-        b=cl*a+delta*d;
-        if strcmp(kind,'nonfinite')
-            % Every derivative-field entry is finite, but its wall derivative
-            % overflows. A nonfinite observed speed Jacobian must not pass.
-            a=(realmax/2)*repmat((-1).^(1:size(R,1))',1,size(R,2));a(1,:)=0;
-        end
-        partials=struct('c_l',a,'delta',d);
-    end
+function J=observed_jacobian(observe,a,d)
+cl=observe(a);delta=observe(d);a=cl.rate.normalized;d=delta.rate.normalized;
+J=[a(1)-a(2),d(1)-d(2);a(3),d(3)];
+end
+
+function [b,partials]=linear_base(cl,delta,a,d,target)
+b=(cl-target(1))*a+(delta-target(2))*d;
+partials=struct('c_l',a,'delta',d);
 end
 
 function result=quadrature_test()
@@ -135,7 +158,7 @@ counts=[41,81,161];errors=zeros(numel(counts),2);values=errors;
 for j=1:numel(counts)
     x=linspace(-2,2,counts(j));q=1+b*x+a*x.^2;
     settings=struct('wallIntegralRadius',1,'referenceWallIntegral',17, ...
-        'referenceWallGradientCentroid',.012,'cOmegaGaugeFloor',1e-12,'pointStrainConditionFloor',1e-12);
+        'referenceWallGradientCentroid',.012);
     ops=struct('x',x,'rescaling',settings);
     integral=ipm_cr.gauge.integral(q,ops,settings);centroid=ipm_cr.gauge.centroid(q,ops);
     values(j,:)=[integral.value,centroid.value];errors(j,:)=abs(values(j,:)-[exactI,exactC]);
@@ -231,13 +254,4 @@ result=struct('residualPresent',true,'tailCorrection',true,'relativeSteps',steps
             end
         end
     end
-end
-
-function expect(callback,identifier)
-try
-    callback();error('ipm_cr:GaugeIntegrityExpectedFailure','Expected %s.',identifier);
-catch problem
-    assert(strcmp(problem.identifier,identifier),'ipm_cr:GaugeIntegrityRejection', ...
-        'Expected %s; received %s.',identifier,problem.identifier);
-end
 end

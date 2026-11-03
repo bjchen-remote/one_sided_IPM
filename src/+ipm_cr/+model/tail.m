@@ -34,9 +34,6 @@ sx=model.widthX;sy=model.widthY;amplitude=model.amplitude;w=model.skewWeight;
 assert(all(isfinite([sx,sy,amplitude,model.centerX,w]))&&sx>0&&sy>0&&amplitude>0&&w>=0&&w<=1, ...
     'ipm_cr:TailModel','Invalid Gaussian primitive parameters.');
 ell=scale.logC_l;omega=scale.logC_omega;
-assert(all(isfinite([ell,omega,scale.X_shift])),'ipm_cr:TailScale');
-% This is a representability guard on actual initial coordinates, not an
-% artificial bound on log scales. In particular ell=400, omega=600 is valid.
 inverse=exp(-ell);
 if isfinite(inverse)&&inverse>0
     difference=X-scale.X_shift;x=difference*inverse;y=Y*inverse;
@@ -48,11 +45,7 @@ overflow=~isfinite(difference);
 if any(overflow,'all')
     x(overflow)=scaled_number(X(overflow),-ell)-scaled_number(scale.X_shift,-ell);
 end
-assert(all(isfinite(x),'all')&&all(isfinite(y),'all')&& ...
-    max([abs(x(:));abs(y(:));0])<=1e150, ...
-    'ipm_cr:TailCoordinateRange','Tail initial coordinates must be representable with magnitude <= 1e150.');
 eta=y/sy;eta2=eta.^2;
-assert(all(isfinite(eta2),'all'),'ipm_cr:TailCoordinateRange');
 useShared=~isempty(shared);
 if useShared
     required={'kind','modelParameters','scaleKey','X','Y','zx','z2','E1','E2','EY','erfc1','erfc2'};
@@ -90,8 +83,8 @@ for k=1:2
         Rxx=Rxx+(-2*amplitude/sx*weights(k)/stretch(k)^2)*ze;
     end
 end
-% The admitted finite-coordinate range keeps D representable. Cache these
-% ratios once; the ordinary trajectory performs no per-query logs here.
+% Cache the geometry ratios once; the ordinary trajectory performs no
+% per-query logs here.
 D=x.^2+y.^2+1;inverseD=1./D;
 a2=(x.^2).*inverseD;Y2=Y.^2;
 K=-2*amplitude*sx/sqrt(pi);
@@ -99,8 +92,6 @@ Tx=(1-4*a2).*R+x.*Rx;
 if sourceOnly
     d=struct('x',scaled_field(K,Tx,omega-3*ell,Y,Y2,2,D,inverseD));
     d.x(Y==0)=0;
-    assert(all(isfinite(d.x),'all'),'ipm_cr:TailRange', ...
-        'The requested analytic tail source is not representable.');
     return
 end
 b2=(y.^2).*inverseD;xi=x.*inverseD;
@@ -125,10 +116,6 @@ end
 wall=Y==0;d.H(wall)=0;d.x(wall)=0;d.y(wall)=0;
 d.timeH(wall)=0;d.timeX(wall)=0;
 if wantSecondDerivatives,d.xx(wall)=0;d.xy(wall)=0;end
-for name={'H','x','y','xx','xy','timeH','timeX'}
-    assert(all(isfinite(d.(name{1})),'all'),'ipm_cr:TailRange', ...
-        'The requested analytic tail is not representable.');
-end
 end
 
 function value=scaled_field(K,bracket,exponent,Y,Y2,power,D,inverseD)

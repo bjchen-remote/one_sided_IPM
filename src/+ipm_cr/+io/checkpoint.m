@@ -45,6 +45,7 @@ assert(isequaln(cp.authority,ipm_cr.io.identity('authority',[],initial)), ...
 cp.kind='ipm_cr_accepted_checkpoint_v2';cp.schemaVersion=2;
 cp.stateRepresentation='W_centered_density_eta_analytic_residual';
 cp.acceptedOnly=true;cp.solverFactorCacheSaved=false;cp.sequence=cp.state.step;
+cp.retainedStartCheckpoint=true;
 cp.contextKey=cp.state.ctxKey;
 cp.spatialAudit=ipm_cr.diag.overlap(cp.state,cp.geometry);
 entry=struct('step',cp.state.step,'tau',cp.state.scale.canonicalTime,'audit',cp.spatialAudit);
@@ -63,6 +64,19 @@ assert(isequaln(check.checkpoint,cp),'ipm_cr:CheckpointReadback', ...
 pointer=struct('kind','ipm_cr_accepted_pointer_v2','schemaVersion',2,'path',name, ...
     'generation',generation,'sequence',cp.sequence,'tau',cp.state.scale.canonicalTime, ...
     'sha256',ipm_cr.io.sha(path),'accumulatedWallSeconds',cp.accumulatedWallSeconds+toc(timer));
+if isempty(previous)
+    % Retain the actual start state when the two rolling slots advance.
+    % Publish it before the first accepted cursor, so a durable run always
+    % has both a hash-bound start and its latest accepted endpoint.
+    initial=fullfile(folder,'initial.mat');pending=[initial,'.writing'];
+    [ok,message]=copyfile(path,pending,'f');assert(ok,'ipm_cr:CheckpointInitial','%s',message);
+    assert(strcmp(ipm_cr.io.sha(pending),pointer.sha256),'ipm_cr:CheckpointInitial', ...
+        'Initial checkpoint copy differs from the accepted start state.');
+    [ok,message]=movefile(pending,initial,'f');assert(ok,'ipm_cr:CheckpointInitial','%s',message);
+    start=struct('kind','ipm_cr_initial_pointer_v1','path','initial.mat', ...
+        'tau',pointer.tau,'sequence',pointer.sequence,'sha256',pointer.sha256);
+    ipm_cr.io.json(fullfile(folder,'initial.json'),start);
+end
 ipm_cr.io.json(fullfile(folder,'latest.json'),pointer);
 end
 
@@ -90,6 +104,18 @@ assert(isstruct(cp)&&isscalar(cp)&&all(isfield(cp,required))&& ...
     cp.sequence==pointer.sequence&&cp.state.step==pointer.sequence&& ...
     cp.state.scale.canonicalTime==pointer.tau&&isequaln(cp.state.ctxKey,cp.contextKey), ...
     'ipm_cr:CheckpointState','Accepted checkpoint schema or sequence is inconsistent.');
+% Earlier v2 checkpoints remain readable without inventing a saved start.
+% Every checkpoint written by this implementation declares and requires it.
+if isfield(cp,'retainedStartCheckpoint')&&cp.retainedStartCheckpoint
+    initialFile=fullfile(folder,'initial.json');
+    assert(isfile(initialFile),'ipm_cr:CheckpointInitial','The retained starting checkpoint manifest is missing.');
+    start=jsondecode(fileread(initialFile));
+    assert(isstruct(start)&&isscalar(start)&&all(isfield(start,{'kind','path','tau','sequence','sha256'}))&& ...
+        strcmp(start.kind,'ipm_cr_initial_pointer_v1')&&strcmp(start.path,'initial.mat')&& ...
+        pointer.tau>=start.tau&&pointer.sequence>=start.sequence&& ...
+        isfile(fullfile(folder,start.path))&&strcmp(ipm_cr.io.sha(fullfile(folder,start.path)),start.sha256), ...
+        'ipm_cr:CheckpointInitial','Retained starting checkpoint identity is missing or changed.');
+end
 end
 
 function [cp,pointer]=read_legacy(folder)

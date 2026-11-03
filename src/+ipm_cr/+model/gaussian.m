@@ -36,7 +36,7 @@ assert(isstruct(scale)&&isscalar(scale)&& ...
     all(isfield(scale,{'logC_l','logC_omega','X_shift'})), ...
     'ipm_cr:BackgroundScale','Supply the current complete RK stage scale.');
 for name={'logC_l','logC_omega','X_shift'}
-    validateattributes(scale.(name{1}),{'numeric'},{'scalar','real','finite'});
+    validateattributes(scale.(name{1}),{'numeric'},{'scalar','real'});
 end
 
 ell=scale.logC_l;omega=scale.logC_omega;

@@ -4,16 +4,18 @@ function [values,map]=sample(fields,g,x,y)
 % Inside the active Cartesian rectangle use Cartesian data; elsewhere use
 % the annulus. Full arrays, including synchronized halos, supply stencils.
 % Optional MAP contains geometry-only sparse core/polar maps for reuse:
-% reshape(map.core*fields.core(:)+map.polar*fields.polar(:),map.shape).
+% values=ipm_cr.mesh.sample(fields,map) uses the identical anchored apply.
 % Invalid queries return NaN. Only tiny wall/outer-radius roundoff is repaired.
+if nargin==2
+    map=g;values=apply_map(fields,map);return
+end
 assert(isstruct(g)&&all(isfield(g,{'core','polar'})), ...
     'ipm_cr:ExplicitInterpolationGrid','Supply the hybrid transport geometry.');
 c=g.core;p=g.polar;xAxis=c.x(:)';yAxis=c.y(:);r=p.r(:);theta=p.theta(:)';
 assert(isstruct(fields)&&isscalar(fields)&&all(isfield(fields,{'core','polar'}))&& ...
     isnumeric(fields.core)&&isreal(fields.core)&&isequal(size(fields.core),[numel(yAxis),numel(xAxis)])&& ...
-    isnumeric(fields.polar)&&isreal(fields.polar)&&isequal(size(fields.polar),[numel(r),numel(theta)])&& ...
-    all(isfinite(fields.core),'all')&&all(isfinite(fields.polar),'all'), ...
-    'ipm_cr:ExplicitInterpolationField','Use complete finite native core/polar scalar fields.');
+    isnumeric(fields.polar)&&isreal(fields.polar)&&isequal(size(fields.polar),[numel(r),numel(theta)]), ...
+    'ipm_cr:ExplicitInterpolationField','Use complete native core/polar scalar fields.');
 assert(isnumeric(x)&&isreal(x)&&isnumeric(y)&&isreal(y)&&isequal(size(x),size(y)), ...
     'ipm_cr:ExplicitInterpolationQueries','Use matching real query arrays.');
 assert(all(isfield(c,{'activeRows','activeColumns'})), ...
@@ -37,8 +39,33 @@ if isempty(hit)
 else
     map=retained{hit}.map;
 end
-values=map.core*fields.core(:)+map.polar*fields.polar(:);
-values(~map.valid)=NaN;values=reshape(values,map.shape);
+values=apply_map(fields,map);
+end
+
+function value=apply_map(fields,map)
+% Each query is anchored at its strongest LOCAL donor. A remote nonzero
+% platform must not inject a row-sum defect into a stencil of exact zeros.
+native=~isfield(map,'referenceOnly')||~map.referenceOnly;
+value=local_apply(map.core,fields.core(:),map.coreAnchor,native)+ ...
+    local_apply(map.polar,fields.polar(:),map.polarAnchor,native);
+value(~map.valid)=NaN;value=reshape(value,map.shape);
+end
+
+function value=local_apply(M,donor,anchor,native)
+binary=which('ipm_cr.mesh.sampleMex');
+if native&&~isempty(binary)&&exist(binary,'file')==3
+    value=ipm_cr.mesh.sampleMex(M,donor,anchor);return
+end
+% Bounded-memory reference path, identical to the native per-row formula.
+value=zeros(size(M,1),1);
+for first=1:2048:numel(value)
+    rows=first:min(first+2047,numel(value));index=anchor(rows);
+    reference=zeros(numel(rows),1);use=index>0;reference(use)=donor(index(use));
+    [i,j,w]=find(M(rows,:));
+    i=i(:);j=j(:);w=w(:);
+    delta=w.*(donor(j)-reshape(reference(i),[],1));
+    value(rows)=reference+accumarray(i,delta,[numel(rows),1],@sum,0);
+end
 end
 
 function map=prepare_map(key,x,y)
@@ -72,7 +99,11 @@ end
 valid=coreOwner|polarOwner;
 rowNorm=full(sum(abs(core),2)+sum(abs(polar),2));
 if isempty(rowNorm),operatorNorm=0;else,operatorNorm=max(rowNorm);end
+[~,coreAnchor]=max(abs(core),[],2);[~,polarAnchor]=max(abs(polar),[],2);
+coreAnchor=full(coreAnchor);polarAnchor=full(polarAnchor);
+coreAnchor(~coreOwner)=0;polarAnchor(~polarOwner)=0;
 map=struct('core',core,'polar',polar,'shape',shape,'valid',valid, ...
+    'coreAnchor',coreAnchor,'polarAnchor',polarAnchor, ...
     'coreOwner',coreOwner,'polarOwner',polarOwner,'allValid',all(valid), ...
     'activeCoreBounds',key.bounds,'interpolationWidth',width, ...
     'operatorInfinityNorm',operatorNorm,'fieldCacheRetained',false);

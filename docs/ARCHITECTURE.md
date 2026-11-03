@@ -1,222 +1,125 @@
-# `ipm_cr` 架构与接口契约
+# ipm_cr 架构与接口
 
-本文说明 `main` 分支唯一维护求解器 `ipm_cr` 的模块边界、数据、缓存和失败行为。使用入口与证据索引见 [README](../README.md)，离散推导与实验解释见 [算法报告](../test/ALGORITHM_REPORT.tex)，网格连接构造及误差预算见 [CONNECTION_METHOD](CONNECTION_METHOD.md)。
+本文描述尚未部署到 NAS `main` 的 compute-only 候选。固定 patch 再分布的活动条带转移已修复，同 τ 转移、三层完整 RHS 阶数测试与实际单事件复算已有局部证据；32项 `repair_release_01` 统一检查已通过（282.715秒），源码与测试输入身份均未改变。长期独立残差降至 `1e-9` 与三段修复版复现尚未验证，不能称整套交付通过。需求见 [MAINLINE_REQUIREMENTS](MAINLINE_REQUIREMENTS.md)，操作见 [USAGE](USAGE.md)，证据与旧失败见 [VALIDATION](VALIDATION.md)。
 
-## 1. 模块边界与公开入口
-
-根目录 `main.m` 是 MATLAB 编辑器 Run 和命令窗口的便捷入口，直接调用维护中的 `src/+ipm_cr`。它从 `config('case')` 构造 case，顶部集中设置目标、预算、输出、初值表达式和所选网格；数值默认解析仍由 `config` 完成。入口选用中层 h=.03、基准 nr=385/ntheta=129、固定远区重分配 factor=2 和谱次数 64/80/20，不把这份运行选择当作通用精度资格。
-
-```matlab
-[c,rho0] = main('config');    % 只返回 case 和向量化表达式
-[summary,s,ctx] = main(c);    % 使用 c.initial
-[summary,s,ctx] = main(c,rho0); % 物化任意表达式后运行
-```
-
-`main('config')` 不构建 MEX、网格或上下文，也不推进。`main()` 使用顶部 case 和 `rho0=@(x,y)(1+tanh(x)).*exp(-y.^2)`；`main(c,rho0)` 接受任意向量化、同形状、有限实数表达式。`tools/set_initial.m` 在实际 core/polar 节点与原固定参考轴上物化函数值，保存独立 SHA 输入并重算 I/P/C，不保存句柄、不进行 Gaussian 拟合。该路径设置 `background.kind='none'`，直接积分 W，不带 η。输入绑定输运网格，换网格须用原表达式重新构建。`main(c)` 按 `c.initial` 运行；当前没有外部离散数组 API。
-
-入口依据自身文件位置加入 `src/tools` 并定位输入；相对输出目录以项目根解析，保留绝对输出路径且不改变 `pwd`。高级 `ipm_cr.run` 的相对输出仍以调用者当前工作目录解析。项目相对 manifest 使用固定的 `/` 分隔规则；输出物理路径接受本平台的盘符、UNC 或 POSIX 绝对形式，二者不是同一种路径契约。
-
-含时运行缺少本平台 MEX 时，`main` 调用 `build_ipm_cr_native`；未选编译器时给出 `mex -setup C++` 指引，失败停止。该准备过程不更换 `linear5` 等数值选择。纯 MATLAB 入口不依赖 Python；现有 Python 监督器和验证启动器仍面向 macOS/Linux，Windows 实机行为另行验收。
+## 1. 主链与模块
 
 ```text
-main.m                             用户 case / 初值表达式 / 路径与本平台内核准备
-src/+ipm_cr/
-  config / problem                 完整数值选项 / 物理初值与规范
-  init / step / rhs / refresh       建立模拟 / 一个接受步 / 完整RHS / 同身份冷恢复
-  sample / run                     通用物理采样 / 可恢复轨道
-  context                          每个模拟独立的只读上下文
-  pconfig / psolver                 独立谱 Poisson 配置与管理
-  +mesh                            网格、ghost、差分和局部采样
-  +model                           初值、authority、解析背景及尾项
-  +gauge                           原 I/P/C、峰值与规范求根
-  +poisson                         源/速度映射计划及 core/polar 谱算子
-  +time                            RK4 试步、阶段 CFL、峰事件与回滚
-  +op                              固定场重构、速度应用及原生内核
-  +io                              checkpoint、history、身份、JSON、SHA
-  +diag                            独立重叠审计与研究区域比较
+main → config / problem → init → context
+run → step → time.step / trial → rhs
+rhs → mesh.fill / diff → context.velocity → FEM
+    → gauge.wall / rates → op.prepare → 完整 F、Q
+run → 周期 remesh → 有界再分布 + 活动转移 + 新 context + 一次完整 RHS
+run → io.checkpoint / history → pack
 ```
 
-公开主链为：
+| 位置 | 职责 |
+|---|---|
+| `config / problem` | 唯一方法默认、case、初值 authority、物理设置 |
+| `context` | 实际几何、方法、原墙和私有 Poisson 计划 |
+| `+mesh` | 轴、度量、D7、活动区、三层 ghost、转移与采样 |
+| `+poisson/+fem` | 弱式、缓存求解、trace 连接和解析 Green 富集 |
+| `+model / +gauge / rhs` | 背景、物理源、原 I/P/C、直接规范求解与完整 RHS |
+| `+op / +time` | 中心对流、耗散、初始率区间、样条 knot 时间网格、同阶段场/尺度/时钟 |
+| `remesh` | 周期源 profile、固定参考再分布与活动主态转移 |
+| `+io / +diag / pack` | 身份、事务存储、被动诊断和原生数据 |
+
+谱与 FD 后端、独立 GLL 布局和旧 namespace 保留为显式参考，不参与默认主链或继承当前资格。
+
+## 2. API 与主态
 
 ```matlab
 opts = ipm_cr.config(overrides);
 [s,ctx] = ipm_cr.init(opts);
-[s,info] = ipm_cr.step(s,ctx,tauEnd);
-eval = ipm_cr.rhs(s,ctx);
+[s,info] = ipm_cr.step(s,ctx,tauEnd,timeControls);
+f = ipm_cr.rhs(s,ctx);
 s = ipm_cr.refresh(s,ctx);
-v = ipm_cr.sample(s,ctx,x,y);
-[summary,s,ctx] = ipm_cr.run(runOptions);
+v = ipm_cr.sample(s,ctx,X,Y);
+[s,newCtx,event] = ipm_cr.remesh(s,ctx,settings);
+[summary,s,ctx] = ipm_cr.run(c);
 ```
 
-`init` 直接构造状态，`rhs` 直接组装本阶段背景与完整 RHS；没有第二套初始化或 RHS 分发入口。`step` 只返回一个接受步，`tauEnd` 是该步上限；完整时间循环由 `run` 管理。`rhs` 返回当前状态的完整求值，可用第二输出 `[eval,W]` 取得同步、重建后的完整中心化密度。`refresh` 在同一数学身份下调用它重建接受态 RHS；两者都不跨版本转换轨道。`sample` 接受匹配的规范坐标查询数组，不要求区域掩码。区域比较、采样范数和研究云在 `diag.compare`，不侵入通用采样。
+`step` 完成一次显式推进，内部 knot 分段属于时间网格构造；完整循环归 `run`。`timeControls` 对应 CFL、`maxDt` 和时间格式，没有 `minDt`。`refresh` 重建同一数学身份的 RHS；方法改变须建立新运行或显式 seed 导入。
 
-初始化、RK 阶段、诊断、history 和 v2 checkpoint 使用规范 `W/rhs` 字段；启用解析背景时另有 `eta`，表达式物化的无背景路径不带它。不再往返转换 `rho/residual/flow`。旧 v1 数据仅在 `io.checkpoint('import',folder)` 只读边界转换命名；`'legacy'` 返回原 payload，不授权新源码续接旧轨道。
-
-`config` 是完整数值选项的唯一默认来源，保持 `geometry/solverOptions/transport/cfl/maxDt/minDt/timeIntegrator/background` 字段。`pconfig` 只定义谱椭圆选项，不与含时 `config` 混用；`problem` 集中物理初值、原始规范和 authority。默认 manifest 为 `data/initial.json`，其原始文件为 `data/reference/gaussian_t0.mat`；选中的其他初值同样以项目相对 manifest 和 MAT SHA 定位。
-
-`model.initial` 保留 Gaussian primitive 参数族及物化初值读取；原 Gaussian 参数的运算顺序与原 authority 一致。`set_initial` 表达式路径按保存的真实网格值初始化 W，不借 Gaussian 解析背景解释。背景选项只控制适用初值的表示，不改变选中初值及其 I/P/C 参考。
-
-`model.reference(cfg)` 直接读取已核 SHA 的原始 t0 frame，返回原墙算子、初始尺度、I/P/C 参考和规范初猜。原墙节点来自该 frame，原 `Dx`、密度/墙源一致性和 t0 时钟均重新核验；建立参考不构造输运网格，也不建立旧 Cartesian/polar 状态载体。
-
-`context` 是每次模拟独立的 handle，公开 `mesh/wall/opts/key/id/identity` 只读；固定 Poisson 计划和 `psolver` 句柄由它私有持有；墙采样 `wallR/wallMap` 对外只读，统计经 `ctx.stats()` 读取。不把每个局部函数改成类，不持有跨状态密度/源/规范观测；数组仍以 struct 和数值矩阵传递。模型、时间步与诊断只能使用匹配身份的状态和上下文。
-
-`tools/run_explicit_experiment.py` 和 `tools/run_validation.py` 通过 `tools/common.py` 统一冻结/校验规则；`tools/build_ipm_cr_native.m` 从源码构建 MEX。Python 工具支持 macOS/Linux，不是 Windows 直接运行 `main.m` 的前置依赖。`tests` 只存验证与研究适配，`examples/poisson_demo.m` 是独立椭圆演示，不推进含时系统；本地历史 `test/main_cr.m` 不承担当前演化入口。
-
-旧 `test/+ipm_cr`、`time_evolution` 和旧运行器在本地保留但不再作为维护依赖或默认 MATLAB 路径；所需旧公共数值函数已收进相应新包，完整旧算法仍在 [`legacy/solvers`](https://github.com/bjchen-remote/one_sided_IPM/tree/legacy/solvers)。`test/prototypes/`、`experiments/`、历史结果及冻结 runtime 保持原位，不能自动清理或借当前包替换旧实验身份。
-
-谱 Poisson 与输运是两套网格。谱配点的端点聚集不进入输运 CFL，输运环带不含原点。`mesh.localMap/tensorMap` 保留当前连接与源映射必需的局部插值。
-
-## 2. 网格和数组
-
-| 对象 | 朝向、作用域与不变量 |
+| 状态 | 含义 |
 |---|---|
-| `g.core` | 行 `Y`、列 `X`；均匀张量网格；默认完整域 `[-1.2,1.2]×[0,1.2]`、步长 `.03`；左右及顶部三层为 ghost，物理墙 `Y=0` 为活动点 |
-| `g.polar` | 行 `r`、列 `θ`；`θ∈[0,π]`；内侧三层为 ghost，其余均为活动点；外半径默认 `1e10`，墙列 `Y=0` |
-| `g.exchange` | 两侧 ghost 的七点张量插值矩阵和常数差分计划；donor 只来自另一侧活动点 |
-| `g.geometryKey` | 实际 `x/y/r/θ/drMetric` 及 ghost、插值宽度；用于源、返回和墙查询缓存身份 |
-| `psolver.Core/Polar` | 核心 Chebyshev 张量与分片 `log(r)`/角向谱网格，仅供 Poisson |
+| `s.W / s.eta` | 完整中心化密度 / 可选解析背景余项，`W=eta+H` |
+| `s.rhs` | 同态 q、速度、规范率、F/Q 及诊断 |
+| `s.scale` | 尺度、平移、密度原点、规范时间与完整物理时钟 |
+| `s.originalAuthority / referencePeak` | 固定初始参考，不随网格重设 |
+| `s.remesh` | 上次周期时刻、次数和固定 `referenceCore` |
+| `s.import` | 显式 seed 来源、SHA、真实 τ 和转移比较 |
 
-两块活动重叠区各自独立演化，不能把一侧活动值投影到另一侧。`mesh.fill` 同时读取交换前两侧的活动 donor 并提交 ghost，不循环读取新 ghost。交换插值使用
+`F=W_τ`、`Q=q_τ`。解析背景路径先微分 η 并加回解析背景导数；对完整 W/F 再差分一般不同于定义的 q/Q，该表示差可记录为诊断。物理密度为 `exp(-logC_omega)*(densityOrigin+W)`。
 
-\[
-f(q)=f_*+\sum_j w_j(f_j-f_*),
-\]
+物理时钟保存 `physicalTime + physicalTimeLow + physicalTimeTail(1:2)` 四字展开。阶段增量、背景时间项与 RK 场和规范标量使用同一 tableau；CSV 的前两字不替代完整时钟。
 
-以局部 donor `f_*` 为锚，常数场的差值严格为零；原几何的只读矩阵兼容路径保留，当前公开恢复仍要求相同数学身份。`diag.overlap` 在独立非节点查询上分别重构两块活动值，记录 `rho/q/F/Q/u` 差异；ghost 相等不是独立活动区一致性的证明。
+## 3. 共同主要节点与连接
 
-### 固定远区径向重分配
+`medium` 从 `data/mesh.json` 读取实际轴，`coarse` 每轴精确取 `1:2:end`，度量步长相应倍增。核心数组行 Y/列 X 为 `129×241 / 65×121`，环带行 r/列 θ 为 `549×193 / 275×97`，外半径 `1e10`。
 
-`mesh.polar` 仅构造基础轴、坐标和径向度量。旧原点拟合、二阶差分、重复一阶矩阵及整张 `R/Theta` 已无活动消费者；实际输运的 `Dr/Dt` 在 `mesh.build` 截取环带后构造。基础轴和度量的算术保持原样。
+要求是 Poisson 与对流主要内部节点完全相同；边界低维例外须单独说明。当前实现全部原生节点共用：`x/y/r/theta`、`X/Y` 和 shape 逐位一致，无额外全局 GLL 未知量。Gauss 点仅作单元内积分。
 
-`opts.geometry.radialRedistribution.enabled` 默认 `false`，关闭时不改变原轴与 `geometryKey`。开启时，`mesh.radial` 在 `uniform_core` 原连续径向轴的旧索引上积分 BetaCDF(8,8) 监测函数，再反解新整数索引。默认保护 `r≤4`，在 `4<r<20` 平滑过渡，外侧索引密度约增至 `factor=2`。固定网格全程不动，不引入 ALE 或含时重映射。
+`mesh.build` 支持 preset、显式生成器或完整 `axes={x,y,r,theta,dxMetric,dyMetric,drMetric}`。实际轴重建微分、度量、活动区、donor、交换、采样和 geometry key。三层 ghost 的活动边界按实际节点确定。
 
-保护前缀直接复制旧节点；只有七点模板完全处于该前缀的度量行复制原 `radialMetric/(baseNr-1)`，其他度量由新整数索引上的七点差分求得。截取环带后设
+物理微分 `mesh.diff` 的活动行只读取同一 patch 的活动节点：内部保留原中心七点模板，人工接口附近采用同一物理坐标上的七点单侧/偏心闭合。core 的墙法向、polar 的两条物理墙和外圆闭合保持原模板。五阶迎风仍使用同步 ghost，活动重叠值不投影。这个选择避免把两片不同的 RHS 截断误差通过 ghost 交换后再作横跨接口的差分；它真实改变了离散源 `q=D_A eta+H_X`，Poisson 与 `Q=D_A eta_tau+H_Xtau` 使用同一个 `D_A`，不是单独更改残差显示。geometry key 记录 `physicalDerivativeClosure=same_patch_active_D7_v1`，旧轨道不继承为同方法资格。光滑场的局部多项式一致性、单侧权重放大、完整反馈及稳定性须分别测试。
 
-\[
-J_r=\Delta r_{\rm metric}(n_r-1),\qquad h_\xi=1/(n_r-1).
-\]
+两片活动副本独立演化。`mesh.fill` 同时由旧活动 donor 填 ghost，不投影活动重叠区；`mesh.sample` 以活动 core 为唯一 owner，执行局部七点采样，其边缘 stencil 可以读到同步 ghost。remesh 转移另行只读活动 donor；采样 owner 相同不表示每个重构 donor 都活动。局部参考值加差分的算式保留常数消去；MEX 与分块 MATLAB 实现使用同一公式，缓存只含几何与查询。
 
-输运的逻辑导数除以 `Jr`，CFL 径向间距为 `drMetric`。物理导数 `Dr` 直接按实际 `r` 构造，不再除 `Jr`。`gridOptions.nr` 为基准请求，`polar.originalNr/polar.nr` 才是重分配后的完整轴/截取轴大小。新增点改变矩阵列步幅，保护检查比较物理 donor 和权重。
+## 4. FEM 与外域
 
-`g.radialRedistribution` 保存新旧索引、插入数、节点和度量保护范围及实际节点数。`mesh.build` 对完整 donor 模板和首活动度量的保护范围做断言，保护半径不足时停止。监测函数为 C7，积分映射及正导数逆映射为 C8；具体公式、整数取整及加密族约定见 [连接方法](CONNECTION_METHOD.md#可选固定远区径向重分配)。
+默认 native C0 Lagrange 元，`degree=5`、`quadOrder=8`、`stride=[]`。几何动态规划分组控制局部插值条件，少量六次元吸收余数，最外完整径向元为六次；不依赖源或测得误差选组，也不增加节点。非空 native `stride` 仅兼容 `stride=degree`。
 
-## 3. 状态、背景和完整场
+核心在物理 x/y、环带在 `t=log(r),theta` 装配弱式。原生 raw `psi` 直接取节点系数；速度来自同一 FE 场的解析单元导数。Gauss 源求积和跨 patch trace 仍需传递。固定几何缓存稀疏 Cholesky 因子和小 Schur 系统；每次 patch 线性解固定作一次原弱残差修正，不按误差挑选迭代次数。构建的角向特征系统、trace、填充与 remesh 重建成本须独立量测。
 
-| 数据 | 定义及持久化要求 |
-|---|---|
-| `s.W` | 完整中心化密度 `W`，核心原点严格为零 |
-| `s.eta` | 实际积分变量 `η=W-H`；启用解析背景时必须保存 |
-| `s.scale.densityOrigin` | 单独保存的密度常数 `a`，完整密度 `R=a+W` |
-| `s.scale` | `logC_l/logC_omega/X_shift`、规范时间、物理时间高低部分 |
-| `s.originalAuthority/ctx.wall` | 原初值 I/P/C 参考及原墙节点，不随网格重定 |
-| `s.rhs` | 对应同一接受态、尺度、方法的完整 RHS、源、速度、规范和诊断；禁止将另一状态的 RHS 作为有效缓存 |
-| `ctx.opts` | 几何、谱阶数、重构/CFL/步长、时间格式、背景的数值身份 |
+墙取 `psi=0`、`u2=0`，允许非零上侧墙源，奇延拓可有跳跃。含时 FEM 显式使用有限源圆盘外置零及齐次 DtN；该 compact-source 模型以总阶三角点 jets 构造20系数的全局多项式 Green 场，FEM 解余项。完整场在原生节点及迹位置加回解析项。直接组件的已知完整外源 Green Dirichlet 问题使用其声明模型。
 
-默认表示为
+弱行、trace、重叠和 Green 误差是不同诊断，不是生产接受门。Green 比较须同源、同尺度、同截断模型；未知物理外源保持 `outerSourceTailCertified=false`。C0 流函数不自动给出连续或 C1 速度，共享面平均也不消除两侧极限的跳跃。
 
-\[
-R=a+W,\quad W=\eta+H,\quad H=G-G(0,0),\qquad
-G=e^\omega[\rho_0(x,y)+tA(x,y)],\quad
-(x,y)=((X-S)e^{-\ell},Ye^{-\ell}).
-\]
+## 5. RK4 时间网格与规范
 
-`model.gaussian` 给出原 Gaussian primitive 的稳定中心化值和解析导数；`model.tail` 给出原初值物理主尾的光滑解析项 `A`；`model.background` 组合二者。`tailCorrection=true` 为默认，初始 `t=0,η=0`。尾项表示有限物理时间的已知解析部分，未预设最终重标度稳态尾部；`tailCorrection=false` 可关闭尾项，`background.kind='none'` 直接积分 `W`。
+默认 `linear5` 五阶迎风、平滑速度系数 `.1`、经典 RK4；`central4`＋KO6 `.2` 为显式中心参考选项。实际非均匀度量进入输运与速率，平滑分裂与所选耗散是离散定义。外圆按已选多项式闭合计算，入流速度与数据模型仅记录为 metadata；本题的物理模型适用性在正式实验前独立确认。
 
-`model.background` 返回 `H/x/y/xx/xy/originX/timeH/timeX`。`timeH/timeX` 已含 `dt_physical/dτ`；调用方不能再乘一次。物理时间使用 `physicalTime/physicalTimeLow` 两部分累加和求尾项，不能只保存一个合并时钟。背景及所有参数均属于检查点恢复身份。
+每次先使用当前已完成态的 RHS 率选取初始区间
 
-`mesh.diff` 按当前传入的物理导数矩阵计算 `D_X/D_Y`，每个模板先形成 `f_j-f_i` 再乘系数，避免密度常数进入差分。当前几何不持有物理差分模板缓存；诊断替换实际矩阵时直接使用新矩阵。常数消去不修复输入本身已经丢失的浮点有效位。
+```text
+h = min(maxDt, 0.95*cfl/currentRhs.rate, tauEnd-currentTau)
+```
 
-## 4. 一次完整 RHS 的契约
+`currentRhs.rate` 包含输运、所选稳定化和幅度反应率。原 I/P/C 的自然三次样条峰使方程在原测量墙 knot 之间分片光滑。分段 RK4 对普通相邻 cell 的连续峰端点跨越，用固定4次 secant/Newton 更新构造到该 knot 的积分段，然后继续余段；所有定位探测从同一起态积分。
 
-`ipm_cr.rhs(s,ctx)` 在一个入口中创建本阶段背景并完成下列绑定计算：
+该构造确定数学分片的时间网格，不按误差或残差接受状态。没有 stage-only guard、残差阈值、括根 fallback、折半、`minDt`、拒绝/重试或旧态择优。ULP 只识别同一坐标，不把峰或状态投影到 knot。非连续的全局峰分支交换仍直接采用原 global maximizer，不按连续 knot 事件定位。
 
-1. 同时同步 `η` ghost，重建完整 `W=η+H`。
-2. 计算残差物理导数并同步其源 ghost，组装 `q=D_Xη+G_X`。
-3. 将残差源映射到独立谱节点；解析 `G_X` 在谱节点直接求值，严格求解 `-Δψ=q`，返回同一谱解的 `u=(-ψ_Y,ψ_X)`。
-4. 在原墙样本上测量完整 `W` 的 I/P/C；查询 `Uref=u1(C,0)`，求解当前重构对应的 `c_l/c_r/c_omega`。
-5. 用真实输运与阶段背景组装 `η_τ` 和完整 `F=W_τ`；独立审计实际 `F` 的 I/P/C 变化率，记录完整 CFL。
+各段内部阶段和新末态照常计算完整 RHS；阶段率、CFL 和规范/Poisson 质量诊断被动记录。末段完整积分剩余 τ，不恢复旧四ulp软上限规则。空间稳定化与四字时钟公式保持原定义。
 
-接受末态额外构造 `Q=D_Xη_τ+H_{τX}`。内部阶段可省略展示用 `ψ` 返回和 `Q`，但不能省略完整源、速度、规范、实际 `F` 审计和 CFL。`s.rhs.F/s.rhs.q/s.rhs.Q` 分别指完整 `W_τ/q/q_τ`；这里 `q=D_Xη+H_X`，解析背景与离散差分并不严格交换，所以不能把 Q 恒等写成 `D_X F`。`representationAudit` 在活动点报告 `Q-D_X F` 的无穷范数；该量是离散表示缺陷，不是连续误差上界。
+`compute_only_release_04` 的时间失败保留：端点差在 `τ≤.11` 约 `1e-15`，在 `.12/.34` 跨 knot 后约 `1e-12`；光滑 `.10/.11` 约 `4.01` 阶。固定四次弦截分段随后已冻结，并通过原 triplet 的 temporal-only 复测及 `compute_only_release_05`，W 时间观测阶3.9606。这是对应冻结版本的时间证据；当前 remesh 修复版的统一检查仍待完成。
 
-完整 F 在活动点先代数消去显式背景时间项，再做浮点加法，避免先减 `timeH` 又加回的有效位损失。残差方程仍含 `-timeH`，Q 仍含 `timeX`；ghost 保留原插值表示。独立完整 F 的 I/P/C 审计继续保留。
+I/P/C 保持原墙离散定义。gauge 对 `(c_l,delta)` 用精确速度 Jacobian 直接 Newton，最多8次更新，点不再改变即停；没有条件数门、线搜索、备用 seed 求根或非唯一峰拒绝。并列峰记录被选全局最大值和分支导数，残差与条件数被动记录。零能量比值按公式未定义，不填假零。
 
-`op.prepare/apply` 在一个 RHS 内固定当前密度空间重构，供规范迭代多次查询速度及偏导；闭包不跨状态保存场。默认 `linear5` 为五阶最优迎风线性重构；`smooth_weno5` 使用平滑归一化 WENO-Z；二者要求兼容 MEX。`legacy_weno5` 保留当前包内的兼容 MATLAB 算子。内核构建记录源码/二进制 SHA 与严格浮点选项，关闭 fast-math 和收缩。
+## 6. 核心形态累积变化触发 remesh
 
-平滑分裂的默认 `σ=.1 min(dx,dy)`，使用 `hypot(v,σ)`；实际分裂速度进入 CFL，墙法向通量为零。离散模式与速度系数是方法选项，不能为提速静默切换。有限外边界的五次外延不是物理入流数据：生产 `config` 默认 `outerInflowPolicy='error'`，完整 CFL 求值发现超出显式容差的入流即拒绝；规范 Newton 私有试探不触发这一终态检查。显式选择 `report` 可复现原外延，但必须承认入流未解决；出流同样不构成远场截断精度证书。
+配置为 `enabled / level / threshold / checkEveryTau / minCheckEveryTau / monitorStrength / blend / maxNodeMotion / candidateAxes`，默认见 [USAGE](USAGE.md#形态触发-remesh)。取全活动正 q 峰值25%超水平集中的主峰连墙分量，按横向最大绝对范围和纵向最大范围计量；相对最后实际 remesh 后参考的任一方向累积变化达到20%才插值。首次仅校准，检查间隔仅控制观测时机，不重置累积参考或强制换网格；按旧形态变化率与阈值余量在 `.005… .5τ` 间调度，保存lastShape及下一检查时刻。几何触发与测试专用的精度验收门严格区分。
 
-## 5. 规范与时间推进
+每次由当前源 profile 更新固定参考核心上的目标密度，作一次有界凸移动，保持点数、patch 外框、原点和环带轴。固定 `referenceCore` 避免反复乘密度。有 η 时转移 η，否则转移 W，再重建 mesh/context 并计算一次完整 RHS。
 
-`gauge.wall` 保留原 I/C 和全窗口自然三次样条峰值 P：先对 `q-max(q)` 求同一最大值，再加回锚值，避免近等高带引入峰位置平台。P 的变化率用同一峰的权重。`gauge.rates` 对固定空间重构的实际输运构造 `(c_l,δ)` 解析偏导，暖启动 Newton/线搜索；原 `gauge.seed` 仅在需要时提供新种子，最终仍按当前完整泛函求根。
+固定完整轴端点和节点数的再分布保留各片独立表示：在本片实际活动轴上用最近七点张量多项式重构，新暴露的边界条带继续本片端部多项式，不从另一片替换活动值，不读旧 ghost，也不投影活动重叠。`localMap`/`tensorMap` 的端部延拓须显式启用，默认仍禁止外推。改变 patch 框或节点数的导入使用覆盖路由，属于另一种表示转移。
 
-Newton 目标为 `16eps`，线搜索停滞且残差不超过 `2e-12` 时允许有记录的有界例外；这不等于达到目标。所有成功出口都要求有限 Jacobian 且 `rcond≥1e-12`，不能因残差恰好为零绕过。非唯一全局峰没有单一峰值导数，明确拒绝而不静默选择分支。墙峰每次量测仅计算一次，端点仍独立重测。原 I/C 求积权重与固定参考不变，其连续求积偏差不因规范残差小而消失。
+随后直接继续，没有候选精度验收、反向转移、W/q/F/Q、速度、IPC、重叠门或回滚。原参考、尺度、四字时钟和步号由复制与数据流保留，在独立测试中验证。构造或算式本身无法计算时由运行器记录错误，不切换替代路径。
 
-`time.step` 默认经典 RK4；`time.rk4` 同时供生产推进与含时制造解使用。密度与以下标量使用同一阶段值和 RK 权重：
+七点多项式次数不是完整 remesh 精度证明。独立 `test_remesh_order` 用三层非零解析 η，在同一新网格/context 上比较转移态与直接解析构造态的完整 W/q/F/Q；舍入受限的误差对不赋阶。当前通过仅限该平滑、被分辨的同 τ 试验；未分辨窄层与长期轨道仍需分别解释。
 
-\[
-\ell'=c_l,\quad\omega'=c_\omega,\quad S'=c_lS+c_r,
-\quad t'=e^{\omega-\ell},\quad a'=F_0+c_\omega a.
-\]
+## 7. 复现与存储
 
-已接受初始 RHS 复用，计算三个内部阶段及新末态完整 RHS；末态留给下一步。每个阶段从同一接受态时钟出发，以未加到大时钟前的 RK 物理时间增量补偿累加；端点 RHS 与最终保存尺度使用同一个 `stageScale`，不从已舍入的大时钟差反推增量。峰跨原样条节点时，用同一接受态出发的真实 RK4 子步定位并分步，保留各阶段 CFL，不投影密度或峰值。`timeIntegrator='ssprk3'` 仅为显式兼容选项；RK4 没有 SSP 保证。
+当前窗口为 medium `0→5`、medium `390→395`、精确半密度 coarse `0→200`。T2 必须使用有来源的真实 τ390 态；三段绑定源码、方法、原初值和规范。结果保存后独立与已有数据比较，报告实际网格、参考底限和方法差异，不通过拟合时间、平移或振幅消除差异。
 
-试步限制为两域**全部活动点**上的真实径向/角向或 Cartesian 速率加 `abs(c_omega)`；只有 ghost 不进入最大值。预测留 5% 余量，初始、三个内部阶段与新末态都必须满足 `dt*rate≤cfl`。超限回滚缩步；可恢复求解失败重试，耗尽重试或低于最小步长后保存失败证据并停止。CFL 审计不替代带高阶连接的稳定性证明。
+context key 绑定实际网格、原墙、方法、初值和源码；`opts.geometry` 保留初始处方。恢复从 checkpoint 的实际 `geometry` 冷建计划，不恢复因子 handle。`run.seed={file,sha256,tau}` 是新运行导入：原墙/authority/背景须相容，保留尺度和时钟，重建目标 RHS，转移比较被动记录。
 
-## 6. 谱 Poisson 与缓存身份
+owner 锁、SHA、读回与原子指针属于文件身份及事务存储。`accepted_*` 表示已完成并提交的数值态，不表示误差合格。`run` 保存实际 mesh、事件谱系、原生场、完整时钟和停止原因；出错不自动重试。停止只有目标、声明预算/步数、物理时间、用户 STOP 或错误，没有在线稳态窗口。
 
-| 缓存 | 所有者与失效条件 |
-|---|---|
-| 核心特征分解、环带逐模 LU、trace Schur LU/齐次响应 | `psolver`；谱几何、边界或配置变化时重建 |
-| 固定 trace/overlap/离网格审计的谱插值计划 | `psolver`；只缓存坐标与权重，不缓存源或解 |
-| 残差源映射与谱速度返回映射 | `context` 私有持有 Poisson plan；实际网格身份或完整谱配置变化时重建 |
-| 原墙查询映射 | `context` 拥有并只读暴露；实际网格或原墙节点变化时重建 |
-| ghost 交换计划 | `mesh.build`；由真实活动 donor、坐标和插值宽度决定 |
-| 密度重构、背景公共原值、规范速率闭包 | 仅单 RHS/单调用，不能跨状态复用 |
+既有 Python 监督器冻结 src、mesh、authority、选项及 seed 副本，按单线程分段、外部资源预算和累计 deadline 执行；恢复不自动延长预算。数值质量不进入该生产循环。
 
-核心为 `A_Y Ψ+Ψ A_X^T=q`；环带在 `t=log(r)` 上求解 `-ψ_tt-ψ_θθ=r²q`，面板匹配值和一阶径向导数。小 Schur 系统连接两域 trace。缓存齐次响应允许“特解+响应”重建；原离散后向误差不满足门限时，回退直接核心/环带求解并重做原审计，不放宽门限。
+## 8. 测试与证据边界
 
-`psolver.reconfigure` 先完成候选几何/缓存再提交；失败保留旧对象，新几何拒绝旧解。计数器记录构建、复用和直接回退。每次保留原方程分量后向误差、Schur/实际 trace、独立重叠 `ψ/u/法向导数` 审计；有独立连续源时才计算离网格强残差。数组残差源叠加解析背景仍没有完整连续源真值，该强残差明确为不可用 `NaN`。`requireAccuracy=true` 默认严格验收。
+独立测试调用同一生产接口，检查公式、制造解、阶数、稳定性、转移、时钟和冷恢复；独立 `test_steady` 不成为实验早停。正式演化只计算与存储，复现比较另行进行。
 
-默认外边界 `decay` 是无源外域的离散角向 DtN：`ψ_t+sqrt(μ_k)ψ=0`。它没有证明域外源可忽略，`outerSourceTailCertified=false`；`dirichlet` 需提供外弧流函数。有限外半径与源尾需独立审计。
-
-## 7. 只读输出与运行事务
-
-`ipm_cr.sample(s,ctx,x,y)` 是完整背景路径的通用物理采样。接受态必须带有匹配的 `W/eta/rhs/scale/step`，`x/y` 形状匹配且有限；域外查询行为按采样实现检查。背景在查询点解析求值，仅余项与原生速度插值，`F/Q` 含 `timeH/timeX`。完整物理速度和去平移速度分列；它不推进、不对齐、不改活动值。
-
-`diag.compare` 才使用 `near/interfaceBand/wall/remoteWallStrip/hotspot` 这些比较区域，保留原三层研究的采样与诊断算术。区域掩码不成为求解器状态或一般采样的必需参数；有限查询范数不是连续区域上界。
-
-`ipm_cr.run` 在每段开始核验维护源相对路径与 SHA、初始输入及完整数值选项。接受 checkpoint 顶层保留 `state/geometry/explicitOptions/wallOps`，状态使用公开字段；还保存 history、来源和必要的恢复信息。context 的私有固定计划不直接序列化，恢复时按相同数学身份冷重建；禁止省略 `eta`、尺度、尾项参数、时钟低位或原始规范。
-
-双槽写完、读回并核验 SHA 后才原子更新 `latest.json`，指针中的 `path` 仅为槽文件 basename，失败文件不成为恢复指针。源码身份采用相对路径，允许完整冻结目录在不改变输入内容的前提下迁移；这不允许更换代码或方法后续接旧轨道。
-
-`main(c)` 继续使用同一 `run` 事务，不维护另一套 checkpoint。改变初值或网格须换输出目录；身份冲突报错，不能删除旧数据后静默重启。恢复还需保持本平台 MEX 字节身份；跨平台重编译不自动授权接续另一平台的旧轨道。
-
-Python 管理器冻结当前 `src`、工具、选项、默认与选中的 manifest/MAT，再监督同一 `ipm_cr.run` 入口。不遍历复制本地保留的旧求解器或原型，冻结和 MATLAB 入口必须使用一致的源码/输入身份。预算、人工停止、资源中止、求解失败和目标达到分别记录；累计 MATLAB 成本与含启停的监督成本分别报告。旧结果和冻结 runtime 保留其原 SHA，不迁移或重写历史实验身份。
-
-## 8. 维护与证据分工
-
-根 `README` 提供当前公开 API、运行示例和验证地图；本文说明模块与数据契约；`CONNECTION_METHOD` 维护连接构造与误差预算；仍位于 `test/ALGORITHM_REPORT.tex` 的算法报告保留推导、实验数字和适用范围，并更新当前源码索引；`CLEANUP` 记录历史退出维护面的闭包、归档与架构迁移。旧 `test/README.md` 只作导航。
-
-迁移前数值维护统一了公共读出并消除重复采样。差分模板缓存候选虽通过逐位回归，中层局部计时约慢 6%，已恢复原差分算法，候选记录留在 [本地历史证据](../test/results/cleanup_20261022)。当前缓存所有权重构与目录迁移须独立验收；它们不继承旧轨道的源码身份，也不声称已得到整机加速。
-
-验证按改动选择：几何/常数/制造解 → 连接和完整 RHS → 短程时间/空间对照 → 固定端点谱加密 → 完整轨道。迁移验收应额外覆盖上下文独立性、暖/冷计划一致性、相对身份、干净副本运行与 checkpoint 冷恢复。名义五阶重构、四阶 RK、很小的线性残差或两条数值轨道相近，均不能单独认证全局精度。既有 τ10 有限采样观测及缺失控制保持原义，当前 τ200 未验证。
-
-## 9. 工程管理原则的出处
-
-参考 PETSc 的 [DM](https://petsc.org/release/manual/dmbase/) 与 [setup/solve](https://petsc.org/release/manualpages/KSP/KSPSetUp/) 分工：网格离散提供求解数据，准备阶段与逐次求解分开。参考 SUNDIALS 的 [SUNContext](https://sundials.readthedocs.io/en/latest/sundials/SUNContext_link.html) 和 [ARKODE 返回状态](https://sundials.readthedocs.io/en/latest/arkode/Usage/User_callable.html)：每个模拟有独立上下文，事件、目标到达与失败有不同含义。参考 AMReX 的 [Geometry/FillBoundary](https://amrex-codes.github.io/amrex/docs_html/Basics.html) 与 [checkpoint](https://amrex-codes.github.io/amrex/docs_html/IO.html)：几何和场分离，ghost 填充不改活动值，应用自行定义完整恢复数据。
-
-这些官方资料支持职责分离与生命周期原则；本项目的包名、context 接口和文件组合是针对 MATLAB 双网格方法的工程选择，不是上述框架规定的实现。此处不引入框架依赖；RK4 算术、CFL、原峰泛函和真实子步事件定位由本项目的数值契约决定。
-
-`io.checkpoint('save',...)` 由持有运行目录 owner 锁的单一写者调用，写前核对传入的上一代指针与磁盘一致；过期游标会在覆盖任何槽之前被拒绝。正常 `run` 自动管理该锁和指针链。
-
-
-## 发布配置与数据边界（2026-10-24）
-
-`config()` 保留完整方法接口；`config('case')` 返回用户 case 模板，含 initial/domain/method/run/stop/save，`config(case,'run')` 统一解析后供 runner 使用。旧 mesh/poisson 和 explicitOptions 仅在此边界归一化。Gaussian manifest 的解析背景来自其参数，init 据此判断严格零 eta 初态；表达式物化输入采用 background none，不带 eta。
-
-`problem(initial)` 和 `io.identity('authority',root,initial)` 绑定项目相对 manifest 与 MAT 的 SHA。`make_initial` 服务 Gaussian 参数族；`set_initial` 为任意向量化表达式保存真实输运值、原固定参考轴及重算的 I/P/C。context 在准备前后核验源码及初值身份，将其纳入只读 key；pack 核对创建时身份，不能用导出时的输入重命名旧状态。
-
-内部时间步仅为 `time.step(state,ctx,finalTau,controls)`；controls 限四项时间策略。几何、原墙和完整方法由 ctx 提供，不存在缺失 ctx 时临时重建的维护分支。数值 RK、峰事件、全阶段 CFL 及 Poisson 直接回退不变。
-
-`diag.steady` 是可选的接受态观测，默认关闭；完整原生活动节点和全部重叠副本的 F/Q、固定网格全场/速率窗口变化共同生成候选。tracker、原生 anchor、最后观测和计数随 checkpoint 保存；策略改变明确重新累计，恢复候选不得额外推进。它不属于 RHS，也不参与阶段演化。
-
-`pack` 在新的 data 子目录保存不含求解器句柄的原生科学包、方法/初值/源码身份、真实坐标/active/ghost、完整场与尺度时钟。论文重采样独立于原生 checkpoint 和误差验证。使用细节见 USAGE；测试清单唯一来源为 tools/validation.json。
+旧 `b890305` 的31项统一检查、未分段 suite04 的时间失败和 suite05 的默认空间/时间屏保留原身份。修复前周期 remesh 的粗轨道扰动、实际事件与转移误差原样保留；当前修复消除了一个复算事件的十多倍 Q 跳变，不等于长期恢复到旧 `1e-9` 残差。早先多门 T1/T3 的 owner STOP 和9次 roundtrip 拒绝仅描述旧机制。当前不宣称发布、C1 速度、近线性成本或未知外源尾认证；GLL/P5、Q4、谱、FD与旧均匀轨道按其原配置解释。

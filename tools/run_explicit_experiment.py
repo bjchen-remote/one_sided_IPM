@@ -7,6 +7,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -14,7 +15,7 @@ import sys
 import time
 from common import (atomic, available_memory, freeze, initial_input, matlab_executable,
                     now, process_rss, quote, relative_file, require_kernel, source_files,
-                    stop_child, verify_snapshot)
+                    sha, stop_child, verify_snapshot)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -23,6 +24,74 @@ def read_options(path):
     def reject(value):
         raise ValueError('Non-finite JSON constant is not allowed: ' + value)
     return json.loads(path.read_text(), parse_constant=reject)
+
+
+def seed_input(options, case_format):
+    """Validate an optional actual-time accepted-state seed, without loading MATLAB."""
+    if not case_format:
+        return None
+    run = options.get('run', {})
+    if not isinstance(run, dict):
+        raise ValueError('case.run must be an object')
+    seed = run.get('seed')
+    if seed is None or seed == []:
+        return None
+    if (not isinstance(seed, dict) or set(seed) != {'file', 'sha256', 'tau'}
+            or not isinstance(seed['file'], str) or not seed['file']
+            or not isinstance(seed['sha256'], str)
+            or re.fullmatch('[0-9a-f]{64}', seed['sha256']) is None
+            or not isinstance(seed['tau'], (int, float)) or isinstance(seed['tau'], bool)
+            or not math.isfinite(seed['tau']) or seed['tau'] < 0):
+        raise ValueError('Seed requires a file, lowercase SHA256 and finite nonnegative actual tau')
+    return seed
+
+
+def freeze_seed(folder, options, case_format):
+    seed = seed_input(options, case_format)
+    if seed is None:
+        return None
+    original = Path(seed['file']).expanduser().resolve()
+    if not original.is_file() or sha(original) != seed['sha256']:
+        raise RuntimeError('Seed file differs from its declared SHA256')
+    destination = folder / 'input_seed.mat'
+    temporary = destination.with_name(destination.name + '.writing')
+    shutil.copy2(original, temporary)
+    if sha(original) != seed['sha256'] or sha(temporary) != seed['sha256']:
+        raise RuntimeError('Seed changed while preparing its immutable copy')
+    os.replace(temporary, destination)
+    if sha(destination) != seed['sha256']:
+        raise RuntimeError('Frozen seed readback differs')
+    # The immutable option uses a run-relative name; each segment binds it
+    # to this folder, so moving a complete run does not lose the seed.
+    record = dict(kind='ipm_cr_frozen_seed_v1', originalFile=str(original),
+                  frozenFile=destination.name, sha256=seed['sha256'], tau=seed['tau'])
+    seed['file'] = destination.name
+    return record
+
+
+def verify_frozen(folder, mission, frozen, expected_options):
+    """Check all frozen inputs before/after each segment and at cold resume."""
+    runtime = folder / 'runtime'
+    verify_snapshot(runtime, frozen)
+    verify_snapshot(folder, {'explicit_options.json': expected_options})
+    if read_options(folder / 'explicit_options.json') != mission['options']:
+        raise RuntimeError('Mission options differ from the frozen numerical input')
+    # source_files is the only source-set definition, including mesh.json.
+    # Missing/changed original files fail above; newly added sources fail here.
+    if not set(source_files(runtime)).issubset(Path(name) for name in frozen):
+        raise RuntimeError('Frozen source file set differs from its inventory')
+    seed = seed_input(mission['options'], mission.get('caseFormat'))
+    record = mission.get('seedInput')
+    if seed is None:
+        if record is not None:
+            raise RuntimeError('Frozen seed provenance differs from numerical input')
+        return
+    if (not isinstance(record, dict) or record.get('kind') != 'ipm_cr_frozen_seed_v1'
+            or record.get('frozenFile') != 'input_seed.mat' or seed['file'] != 'input_seed.mat'
+            or record.get('sha256') != seed['sha256'] or record.get('tau') != seed['tau']):
+        raise RuntimeError('Frozen seed identity differs from numerical input')
+    if not (folder / 'input_seed.mat').is_file() or sha(folder / 'input_seed.mat') != seed['sha256']:
+        raise RuntimeError('Frozen seed file differs from its declared SHA256')
 
 
 def prepare(folder, args):
@@ -42,10 +111,10 @@ def prepare(folder, args):
     folder.mkdir(parents=True, exist_ok=False)
     inventory = freeze(ROOT, folder / 'runtime', inputs)
     initial_input(folder / 'runtime', initial)
+    seed = freeze_seed(folder, options, bool(args.case))
     atomic(folder / 'source_inventory.json', inventory)
     atomic(folder / 'explicit_options.json', options)
     # Options are immutable input, independent of mutable mission/progress records.
-    from common import sha
     atomic(folder / 'options_identity.json', {'sha256': sha(folder / 'explicit_options.json')})
     deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=args.hours)
     atomic(folder / 'mission.json', dict(
@@ -53,9 +122,10 @@ def prepare(folder, args):
         createdUtc=now(), deadlineUtc=deadline.isoformat(), segmentSeconds=args.segment_seconds,
         threads=1, rssLimitBytes=2 * 1024**3, minimumFreeDiskBytes=8 * 1024**3,
         matlab=args.matlab, sourceFrozen=True,
-        caseFormat=bool(args.case), initial=initial,
+        caseFormat=bool(args.case), initial=initial, seedInput=seed,
         timeIntegrator=method.get('timeIntegrator', 'rk4'),
-        timeControl='all_active_both_patches_all_stages_physical_CFL',
+        timeControl='initial_rate_CFL_formula_stage_rates_observed',
+        timePartition='ordinary_original_IPC_cubic_spline_knots_fixed_four_secant',
         implicitStages=0, polarOriginPresent=False, trajectoryAccuracyCertified=False,
         options=options, segments=[]))
 
@@ -79,20 +149,12 @@ def supervise(folder, matlab):
         mission = json.loads((folder / 'mission.json').read_text())
         if mission.get('kind') != 'ipm_cr_frozen_run_v2':
             raise RuntimeError('Resume requires this v2 frozen run protocol')
-        from common import sha
         expected_options = json.loads((folder / 'options_identity.json').read_text())['sha256']
-        if sha(folder / 'explicit_options.json') != expected_options:
-            raise RuntimeError('Frozen numerical options changed')
-        if json.loads((folder / 'explicit_options.json').read_text()) != mission['options']:
-            raise RuntimeError('Mission options differ from the frozen numerical input')
+        frozen = json.loads((folder / 'source_inventory.json').read_text())
+        verify_frozen(folder, mission, frozen, expected_options)
         numerical = mission['options'].get('method', {}) if mission.get('caseFormat') else mission['options']
         require_kernel(folder / 'runtime', numerical)
         initial_input(folder / 'runtime', mission.get('initial', 'data/initial.json'))
-        frozen = json.loads((folder / 'source_inventory.json').read_text())
-        verify_snapshot(folder / 'runtime', frozen)
-        expected_sources = sorted(Path(path) for path in frozen if path.startswith('src/') or path == 'data/initial.json')
-        if source_files(folder / 'runtime') != expected_sources:
-            raise RuntimeError('Frozen source file set differs from its inventory')
         previous_wall = mission.get('supervisorWallSeconds', 0)
         native = folder / 'native'
         native.mkdir(exist_ok=True)
@@ -111,16 +173,15 @@ def supervise(folder, matlab):
                     break
                 assert shutil.disk_usage(folder).free >= mission['minimumFreeDiskBytes'], 'Insufficient free disk'
                 assert available_memory() >= 1024**3, 'Insufficient available memory'
-                verify_snapshot(folder / 'runtime', frozen)
-                verify_snapshot(folder, {'explicit_options.json': expected_options})
-                if source_files(folder / 'runtime') != expected_sources:
-                    raise RuntimeError('Frozen source file set changed')
+                verify_frozen(folder, mission, frozen, expected_options)
                 index = len(mission['segments']) + 1
                 script = folder / 'segment.m'
                 if mission.get('caseFormat'):
                     invocation = (
                         "opts=jsondecode(fileread('" + quote(folder / 'explicit_options.json') + "'));\n"
                         "if ~isfield(opts,'run'),opts.run=struct();end\n"
+                        + ("opts.run.seed.file='" + quote(folder / 'input_seed.mat') + "';\n"
+                           if mission.get('seedInput') is not None else "") +
                         "opts.run.outputDir='" + quote(native) + "';opts.run.tauEnd=" + repr(mission['targetTau']) + ";\n"
                         "opts.run.wallSeconds=" + repr(min(mission['segmentSeconds'], max(0.001, (deadline-dt.datetime.now(dt.timezone.utc)).total_seconds()))) + ";\n")
                 else:
@@ -168,10 +229,7 @@ def supervise(folder, matlab):
                         time.sleep(5)
                     entry.update(returncode=child.wait(), elapsedSeconds=time.monotonic() - segment_started, endedUtc=now())
                 mission.pop('matlabPid', None)
-                verify_snapshot(folder / 'runtime', frozen)
-                verify_snapshot(folder, {'explicit_options.json': expected_options})
-                if source_files(folder / 'runtime') != expected_sources:
-                    raise RuntimeError('Frozen source file set changed')
+                verify_frozen(folder, mission, frozen, expected_options)
                 if reason:
                     # A final checkpoint can be committed while MATLAB is
                     # still shutting down. Prefer that durable completion.

@@ -1,123 +1,93 @@
 # ipm_cr：单侧 IPM 混合网格求解器
 
-`main` 维护 `ipm_cr`：均匀 Cartesian 张量核心、不含原点的极坐标环带、独立谱 Poisson 求解，以及全部活动点、全部阶段受物理 CFL 约束的显式 RK4。解析背景与残差分离用于控制远场表示及舍入误差。
+默认运行入口为 `main.m`，使用非均匀中网格：核心 `129×241`、环带 `549×193`。Poisson 与对流共用全部主节点；粗网格只将四个轴各隔点取样。默认 FEM、`linear5` 五阶迎风、RK4 和核心形态触发 remesh，`central4` 中心格式保留为显式选项。
 
-[运行与数据](docs/USAGE.md) · [架构与接口](docs/ARCHITECTURE.md) · [网格连接](docs/CONNECTION_METHOD.md) · [算法报告](test/ALGORITHM_REPORT.tex) · [分支与复现](REPOSITORY.md) · [验收](docs/VALIDATION.md) · [维护入口](docs/MAINTENANCE.md)
+本版包含独立 patch 高阶 remesh、累计形态触发及人工接口的活动点微分闭合。接口修复的12项相关回归通过；所测解析标量对流接口再次求导的有限对阶为4.80/4.08。完整非线性轨道、全部派生量的连续精度及整套主干验收仍按 [验收记录](docs/VALIDATION.md) 分别报告，源码发布不等于这些结论已全部成立。
 
-## 网格一览
+本轮复现实验窗口为中网格 `τ=0→5`、中网格 `390→395`、精确半密度粗网格 `0→200`，重点与已有数据作独立对照。需求及最新指令见 [主干契约](docs/MAINLINE_REQUIREMENTS.md)；计算、独立测试和结果比较分别安排。
 
-[![核心张量网格与极坐标环带](docs/figs/mesh-near.png)](docs/figs/mesh-near.pdf)
+[使用](docs/USAGE.md) · [架构/API](docs/ARCHITECTURE.md) · [FEM 方法与历史证据](docs/FEM_POISSON.md) · [参考后端](docs/SAME_MESH_POISSON.md) · [验收记录](docs/VALIDATION.md) · [分支与复现](REPOSITORY.md)
 
-近场采用均匀张量核心与极坐标环带：蓝色为核心活动网格，珊瑚色为环带活动网格，灰色为三层 ghost，浅灰底为独立演化的活动重叠区。主图保持原生坐标等比例；右侧放大框对应张量核心顶部的真实连接区，实心点为活动节点，空心点为 ghost。
+## 当前数值方法
 
-[![从精细核心延伸至超远场的全域多尺度网格](docs/figs/mesh-global.png)](docs/figs/mesh-global.pdf)
+| 部分 | 候选实现 |
+|---|---|
+| 几何 | 核心内部非均匀加密＋不含原点的环带；三层 ghost，活动重叠副本独立 |
+| 中 / 粗网格 | 核心数组 `129×241 / 65×121`，环带 `549×193 / 275×97`；粗轴精确取 `1:2:end` |
+| Poisson | 原生节点 C0 FEM，`degree=5`、`quadOrder=8`、`stride=[]`；几何分组包含少量六次元，最外完整径向元为六次；缓存稀疏 Cholesky＋小 trace 系统 |
+| 外域 | 显式有限源圆盘外取零＋外域 DtN；该 compact-source 模型采用解析 Green 角点富集 |
+| 对流 | 默认 `linear5` 五阶迎风、平滑速度系数 `.1`；`central4`＋KO6 `.2` 保留为显式选项 |
+| 物理微分 | 内部中心 D7；人工接口活动行采用本 patch 七点单侧/偏心闭合，q 与 Q 同算子 |
+| 时间 / gauge | RK4＋原墙样条 knot 固定四次弦截分段；初始区间按当前 RHS 率选取；原 I/P/C 精确速度 Jacobian、最多8次直接 Newton 更新 |
+| remesh | 核心主峰连墙区域的方向尺度累积变化达20%才重分布；固定 patch 外框内保留各片独立活动重构，端部七点多项式继续；新 context 和一次完整 RHS |
 
-核心步长 $h=0.03$，外半径 $R=10^{10}$，两者相差超过 **11 个数量级**。全域图以 $s=\log_{10}(1+r)$ 压缩径向显示，保留全部实际网格线；三个半径标注说明原生尺度，外轮廓是实际最外层网格。该显示变换不代表物理网格含时移动。
+Poisson 与对流的主要内部节点完全共用。当前实现进一步共用全部原生 `x/y/r/theta`、物理 `X/Y` 和数组 shape；没有独立的全局 GLL 未知量。Gauss 点仅作局部求积，原生源到求积点和跨 patch 迹仍有传递。raw FEM 的节点 `psi` 直接取系数，速度由同一有限元基函数求导；富集时系数表示余项，完整场加回解析 Green 场。
 
-点击图片可查看矢量 PDF；[完整图注、配置与复现说明](docs/MESH.md)。
+初始积分区间为
 
-## 在 MATLAB 中直接运行
-
-打开项目根目录的 `main.m`，在顶部设置参数和初值表达式，然后点击编辑器 **Run**；也可执行 `main`。默认表达式为 `@(x,y)(1+tanh(x)).*exp(-y.^2)`，目标 τ=200、调用预算600秒、输出为项目根 `result`、外半径为 `1e10`。入口选择 h=.03、基准 nr=385/ntheta=129、远区重分配 factor=2、Poisson 次数64/80/20。预算耗尽会保存接受态，不保证600秒达到τ=200。
-
-这一路径需要 MATLAB 和兼容的 C++ 编译器，不需要 Python。缺少本平台 MEX 时，`main` 自动调用 `build_ipm_cr_native`；尚未配置编译器时按提示执行 `mex -setup C++`，再运行。内核从源码在本机生成，二进制不入库，也不会自动切换重构算法。
-
-```matlab
-[c,rho0] = main('config');           % 只返回 case 和表达式；不构建或求解
-c.run.tauEnd = .003;
-c.run.wallSeconds = 120;
-c.run.outputDir = 'result/smoke';
-rho0 = @(x,y)(1+tanh(x)).*exp(-y.^2);
-[summary,s,ctx] = main(c,rho0);
+```text
+h = min(maxDt, 0.95*cfl/currentRhs.rate, tauEnd-currentTau)
 ```
 
-`main(c)` 使用 `c.initial`；`main(c,rho0)` 接受任意向量化表达式，须返回与坐标同形状的有限实数。`tools/set_initial.m` 在实际 core/polar 节点和原固定参考轴上物化函数值，保存独立 SHA 输入并重算 I/P/C；不保存句柄，不做 Gaussian 拟合。该路径使用 `background.kind='none'`，直接积分 W，不带 η。物化初值绑定输运网格，换网格须用原表达式重建并换输出目录；身份冲突会拒绝，旧数据保留。
+默认 `cfl=.3`、`maxDt=.2`。原 I/P/C 使用全局自然三次样条峰，连续峰跨原墙 knot 时方程分片光滑。分段 RK4 对普通相邻 cell 的连续端点跨越使用固定4次 secant/Newton 更新，积分到该 knot 后继续余段；探测均从同一起态积分。非连续的全局峰分支交换按原 global maximizer 直接演化。
 
-`main` 的相对输出路径以项目根目录定位，调用不要求切换当前工作目录。Windows 可解压到 `C:\work\one_sided_IPM`，打开其中的 `main.m`；必须保留 `src\+ipm_cr` 及其所有带 `+` 的子目录。输出文件名不使用冒号。Windows 实机编译和运行尚未验证，当前证据边界见[验收记录](docs/VALIDATION.md)。
+这是原方程的时间网格构造，精度判断仍由独立测试完成。没有残差阈值验收、stage-only guard、括根 fallback、折半、`minDt`、拒绝重试或旧态择优；ULP 仅识别同一坐标，不投影峰或状态。阶段 CFL、规范残差和 Poisson 质量诊断被动记录；平滑速度项与 KO6 保持所选空间公式。
 
-## 库接口与短程计算
+## MATLAB 与库入口
 
-需要直接操作状态或上下文时，在项目根目录执行：
+根目录 `main.m` 顶部可编辑 case。默认 `rho0=[]`，使用 `data/initial.json` 登记的原 Gaussian；默认目标 `τ=200`、本次预算600秒、输出为项目根 `result`。
 
 ```matlab
-restoredefaultpath;
-addpath('src','tools');
-build_ipm_cr_native();       % 从源码在本机生成内核，二进制不入库
-opts = ipm_cr.config();      % 完整数值设置的唯一默认入口
+[c,rho0] = main('config');       % 只读，不构建或求解
+c.run.tauEnd = 5;
+c.run.outputDir = 'result/medium_0_5';
+[summary,s,ctx] = main(c);
+```
+
+`main(c,rho0)` 也接受向量化初值表达式。表达式按实际网格物化并绑定 SHA，重新计算原墙参考；改变初值或初始网格使用新输入与目录。直接库入口为：
+
+```matlab
+addpath('src');
+opts = ipm_cr.config();
 [s,ctx] = ipm_cr.init(opts);
-[s,info] = ipm_cr.step(s,ctx,.03);  % 一个接受步，且不越过 tauEnd
+[s,info] = ipm_cr.step(s,ctx,.003);
+f = ipm_cr.rhs(s,ctx);
 v = ipm_cr.sample(s,ctx,[0;.3],[0;.1]);
 ```
 
-`step` 返回一个已接受步；它不是推进到指定时间的循环。`tauEnd` 是该步的上限；完整轨道交给 `ipm_cr.run`。采样只需要匹配的规范坐标查询 `X/Y`，不要求研究区域掩码。`s.W` 是完整中心化密度；解析背景路径另有积分余项 `s.eta`，无背景表达式路径没有该字段。`s.rhs` 保存完整 RHS 与诊断，`s.scale` 保存尺度及补偿物理时钟。核心完整规范密度为 `s.scale.densityOrigin+s.W.core`，环带同理，原物理密度再乘 `exp(-s.scale.logC_omega)`。`ctx` 持有网格、原墙参考、方法与私有固定计划；计数经 `ctx.stats()` 读取。
+完整循环只有 `ipm_cr.run(case)`；`main` 是其路径与输入包装。采样可用同公式的 MEX 或分块 MATLAB 实现；默认 `linear5` 与显式 `smooth_weno5` 需要 WENO MEX。`main` 可构建本机内核，二进制不入库；Windows 实机运行与恢复尚未验收。
 
-独立椭圆演示不推进含时系统：
+remesh 的形态触发与重分布配置由 `ipm_cr.remesh('config')` 给出，见 [使用说明](docs/USAGE.md#形态触发-remesh)。固定节点数与完整轴端点时，新暴露条带继续本 patch 最近七活动点的多项式，不读 ghost 或切换到另一片活动副本；通用采样默认仍不外推。完成转移与一次 fresh RHS 后直接继续，没有误差触发阈值、候选验收或回滚。原参考、尺度和全部时钟在测试中核验。
 
-```matlab
-addpath('examples');
-[~,~,diagnostic] = poisson_demo();
-assert(diagnostic.accepted);
-```
+## 复现、停止与存储
 
-## 完整轨道、停止与恢复
-
-用户编辑一份 case，数值方法、运行预算和停止条件分别设置。下面直接调用高级接口 `ipm_cr.run`；其相对输出路径以当前 MATLAB 工作目录定位，`main(c)` 则以项目根目录定位：
-
-```matlab
-c = ipm_cr.config('case');
-c.run.tauEnd = 10;
-c.run.wallSeconds = 600;
-c.run.outputDir = 'result';          % 默认输出目录
-c.domain.rmax = 1e10;                % 默认共同外半径
-c.save.label = 'my_tau10';
-[summary,s,ctx] = ipm_cr.run(c);
-% 同一源码、初值、方法和目录再次调用，继续最后完整接受态。
-[summary,s,ctx] = ipm_cr.run(c);
-% 已配好的中层示例：ipm_cr.run('examples/case.json')
-```
-
-`wallSeconds` 是本次调用预算，`tauEnd` 是规范时间的绝对目标；`stop.physicalTime` 和默认关闭的 `stop.steady` 提供其他停止条件。稳态只报告完整 F/Q 与连续窗口通过的候选。在输出目录创建 `STOP` 会在接受步边界保存退出。改变源码、初值或方法须使用新目录；`refresh` 不转换跨版本轨道。初值生成、全部控制、状态含义及数据读取见[使用说明](docs/USAGE.md)。
-
-在 macOS/Linux 上，长实验可由 Python 3 管理器冻结输入并约束总预算：
-
-```sh
-python3 tools/run_explicit_experiment.py start --case examples/case.json
-python3 tools/run_explicit_experiment.py status \
-  --output "$PWD/result"
-```
-
-管理器冻结 `src`、所需工具、选项和初始输入，并核对相对路径的源码身份。单线程串行运行，限制 RSS、可用内存、磁盘和总时间；MATLAB 段成本与监督进程总成本分别记录。`resume` 沿用原任务的绝对截止时间；额外预算必须独立记录，不能自动延长原账本。该 Python 监督器和验证启动器目前面向 macOS/Linux，不宣称 Windows 可用；Windows 直接使用 MATLAB 入口。
-
-## 输出与验证
-
-| 输出 | 含义 |
+| 实验 | 网格与实际窗口 |
 |---|---|
-| `summary.json`、`summary.mat` | 实际状态、终点、累计耗时和方法摘要 |
-| `latest.json` | 最后接受检查点的槽文件名、序号和 SHA-256 |
-| `accepted_0.mat`、`accepted_1.mat` | 交替槽；只读取指针指定且 SHA 正确的槽 |
-| checkpoint 的 `state/geometry/explicitOptions/wallOps` | 主态、实际网格、数值选项和原始墙规范；固定计划可冷重建 |
-| `history/historyColumns` | 每步实际 CFL、重试、Poisson、I/P/C、峰事件与耗时 |
+| T1 | medium，从登记原始初值 `0→5` |
+| T2 | medium，从有来源的真实 `τ=390` 态到 `395` |
+| T3 | 原四轴各减半密度的 coarse，从相同物理初值 `0→200` |
 
-`ipm_cr.rhs(s,ctx)` 求当前状态的完整耦合 RHS，`ipm_cr.sample(s,ctx,x,y)` 只读重建完整场；带区域掩码的三层研究比较由 `ipm_cr.diag.compare` 负责。未去平移的规范速度和去平移速度分开，`q=W_X`、`F=W_τ`、`Q=F_X` 不与残差导数混用。
+晚期 seed 显式声明 `file/sha256/tau`，建立新运行并记录跨方法/网格导入；不能称为同方法恢复或从零演化。与已有数据的比较在保存结果后独立进行，匹配实际 τ、初值、规范、尺度和时钟，不拟合平移、振幅或时间掩盖差异。
 
-只读网格绘图为 `examples/plot_ipm_cr_mesh.m`，通过统一 checkpoint API 读取当前 v2 或显式只读导入历史 v1，不重建 RHS；绘图所需辅助函数随源码提供。
+`stop` 只含 `physicalTime`。目标、调用预算、累计步数和用户 `STOP` 管理运行时长；没有 `steady_candidate` 数值早停。既有 Python 监督器负责冻结、单线程分段、资源预算和累计绝对截止，`resume` 不自动增加预算。
 
-测试从 `tests` 运行，输出写入新的独立目录。原生构建入口在 `tools`，演示与只读绘图在 `examples`；不再把整套求解器放入测试目录。
+| 输出 | 内容 |
+|---|---|
+| `latest.json`、`accepted_0/1.mat` | 原子提交的已完成态与 SHA；文件名中的 accepted 不代表精度认证 |
+| `initial.mat/json` | 本次真实起态及 SHA，滚动检查点不覆盖 |
+| checkpoint、`mesh/` | 完整主态、实际网格、原墙参考、方法/输入、四字时钟、形态参考控制器和 remesh 谱系 |
+| summary、history、`data/` | 真实终点、停止原因、被动诊断、成本及原生 W/η/q/F/Q/速度 |
 
-维护测试只在 [tools/validation.json](tools/validation.json) 登记一份清单。以下 Python 命令用于 macOS/Linux；MATLAB 测试函数位于 `tests`：
+`W` 是中心化密度，完整规范密度为 `densityOrigin+W`；解析背景路径积分 η。`F=W_τ`、`Q=q_τ`，不能用余项 RHS 或对完整 F 再差分替代 Q。显示重采样与原生数据、独立误差参考分开保存。
 
-```sh
-python3 tools/run_validation.py --list
-python3 tools/run_validation.py --suite quick
-python3 tools/run_validation.py --suite full
-```
+## 独立测试与旧证据
 
-默认套件可在干净克隆准备和运行；MEX 按需从源码构建并核验。昂贵研究和外部历史比较分别显式选择 `research/history`，缺数据记录 skipped。检查完成与精度资格分开报告。
+生产轨道不执行误差门。组件、制造解、空间/时间阶、稳定性、转移和冷恢复测试调用同一生产 API，在正式实验之前独立安排；稳态分析保留为独立 `test_steady`，不进入实验停止逻辑。已有静态 Green 证据按其冻结来源引用。
 
-`tests/run_ipm_cr_explicit.m` 是旧研究签名的适配入口，生产调用使用 `ipm_cr.run`。历史脚本和冻结 runtime 按其原身份运行，不为迁移后包生成新的历史资格声明。
+修复前的 coarse 复算曾在同一 remesh 时刻把完整活动点 `Q∞` 从 `.0029181` 推至 `.0365613`；修复后该事件变为 `.0029181→.0029185`。真实 η 往返误差从 `6.65e-3` 降至 `2.82e-5`。这些局部证据与三层非零 η 的完整 RHS 阶数测试分别记录在 [验收记录](docs/VALIDATION.md)，不替代长期复现。七点次数不保证未分辨窄层精度或每一项小截断误差均下降。
 
-## 源码与数值证据边界
+`compute_only_release_04` 完成31项 requested checks，但时间资格为 false。本次诊断中新旧端点差在 `τ≤.11` 约 `1e-15`，`.12/.34` 跨自然样条 knot 后升至 `1e-12`；光滑 `.10/.11` 的时间观测阶仍约 `4.01`。该失败保留。数学分段已通过原 triplet 的独立复测及完整 suite05；F 和部分标量低于分辨屏，仍不赋予观测阶。
 
-`src/+ipm_cr` 是完整的维护源码；不依赖旧 `+ipm/+ipm_c` 包。`config` 管完整数值选项，`pconfig/psolver` 只管独立椭圆系统，`problem` 集中物理初值和规范。初始文件由 [data/initial.json](data/initial.json) 定位并校验 SHA。完整旧算法在 [`legacy/solvers`](https://github.com/bjchen-remote/one_sided_IPM/tree/legacy/solvers)；本地保留旧目录、结果和原型不属于维护源码。
+旧 `b890305` 的31项统一检查耗时 `237.63 s`；当时非零墙角源的完整速度/角点速度观测阶为 `4.2927–4.2960 / 4.0242–4.1302`，RK4 的 W 时间观测阶为 `3.9566`。这些只证明旧冻结配置的相应有限测试；旧 radial 完整空间资格仍为 false，不能转移为当前 compute-only 源码或新复现窗口的通过记录。
 
-已有短窗自收敛测量和维护等价回归；全局空间阶、完整长轨迹精度以及等误差速度优势仍需分别验证。数值及适用范围见[算法报告](test/ALGORITHM_REPORT.tex)，维护证据见[VALIDATION](docs/VALIDATION.md)与[本地证据索引](docs/EVIDENCE.json)。发布配置、接受态停止/恢复/导出和17项维护检查已通过；完整精度研究另行记录。
+旧多门版本 T1 正常停止于约 `τ=1.2878`，T3 正常停止于约 `τ=23.297`、3680步，保存了旧往返门9次拒绝；两者为 owner STOP，不能记为新版本成功或数值失败。旧独立 GLL/P5 的角点阶数失败，以及 Q4、谱、FD、旧均匀网格轨道与 frozen runtime，保留各自范围。尚无本候选整套发布、全局 C1 速度、通用 `O(N)` 成本或未知物理外源尾的认证。

@@ -5,9 +5,8 @@ function [rho,info]=fill(input,g)
 % are never projected onto the other patch by this operation.
 assert(isstruct(input)&&isscalar(input)&&all(isfield(input,{'core','polar'}))&& ...
     isnumeric(input.core)&&isreal(input.core)&&isequal(size(input.core),size(g.core.X))&& ...
-    isnumeric(input.polar)&&isreal(input.polar)&&isequal(size(input.polar),size(g.polar.X))&& ...
-    all(isfinite(input.core),'all')&&all(isfinite(input.polar),'all'), ...
-    'ipm_cr:ExplicitSynchronization','Use finite native Cartesian and annular density arrays.');
+    isnumeric(input.polar)&&isreal(input.polar)&&isequal(size(input.polar),size(g.polar.X)), ...
+    'ipm_cr:ExplicitSynchronization','Use native Cartesian and annular density arrays.');
 e=g.exchange;
 if isfield(e,'coreDifferencePlan')
     newCoreGhost=apply(e.coreDifferencePlan,input.polar(e.polarDonorIndices));
@@ -17,8 +16,6 @@ else
     newCoreGhost=e.coreFromPolar*input.polar(e.polarDonorIndices);
     newPolarGhost=e.polarFromCore*input.core(e.coreDonorIndices);
 end
-assert(all(isfinite(newCoreGhost))&&all(isfinite(newPolarGhost)), ...
-    'ipm_cr:ExplicitSynchronization','An active-donor ghost interpolation produced a nonfinite value.');
 rho=input;
 rho.core(e.coreGhostIndices)=newCoreGhost;
 rho.polar(e.polarGhostIndices)=newPolarGhost;

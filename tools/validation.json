@@ -7,43 +7,593 @@
     "history": "Explicit external checkpoints or independently frozen baselines."
   },
   "suites": {
-    "quick": ["config", "initial", "steady", "arch", "runtime", "native"],
-    "components": ["main", "release", "step", "elliptic", "connection", "background", "superposition", "tail", "gauge", "radial", "solver_state", "solver_gauge", "solver_poisson", "solver_transport"],
-    "full": ["@quick", "@components"],
-    "elliptic": ["elliptic"],
-    "runtime": ["runtime"],
-    "research": ["order", "ivp", "endpoint", "backward", "profile"],
-    "history": ["refactor", "step_history", "gauge_history", "radial_history"]
+    "quick": [
+      "config",
+      "initial",
+      "steady",
+      "arch",
+      "runtime",
+      "native"
+    ],
+    "components": [
+      "main",
+      "release",
+      "step",
+      "elliptic",
+      "connection",
+      "background",
+      "superposition",
+      "tail",
+      "gauge",
+      "radial",
+      "solver_state",
+      "solver_gauge",
+      "solver_poisson",
+      "solver_transport",
+      "same_mesh",
+      "fem",
+      "fem_green",
+      "fem_wall"
+    ],
+    "full": [
+      "@quick",
+      "@components",
+      "@mainline_components"
+    ],
+    "mainline_release": [
+      "@full",
+      "mainline_accuracy"
+    ],
+    "mainline_components": [
+      "mainline_mesh",
+      "central",
+      "fem_sparse",
+      "fem_native_grid",
+      "remesh_region",
+      "remesh",
+      "remesh_order",
+      "mainline_runtime"
+    ],
+    "elliptic": [
+      "elliptic"
+    ],
+    "runtime": [
+      "runtime"
+    ],
+    "research": [
+      "order",
+      "ivp",
+      "endpoint",
+      "backward",
+      "profile"
+    ],
+    "history": [
+      "refactor",
+      "step_history",
+      "gauge_history",
+      "radial_history"
+    ]
   },
   "tests": [
-    {"id":"config","group":"quick","function":"test_config","call":"output","options":{},"requiresNative":false,"timeoutSeconds":60,"success":"r.passed","meaning":"Public case/configuration roundtrip, coupled physical radius, selected initial datum and rejection rules; no PDE solve."},
-    {"id":"initial","group":"quick","function":"test_initial","call":"output","options":{},"requiresNative":false,"timeoutSeconds":120,"success":"r.passed","meaning":"Gaussian authority generation, fixed original reference axes, selected configuration, portable manifest/MAT identity and provenance rejections; no PDE initialization integration."},
-    {"id":"steady","group":"quick","function":"test_steady","call":"output","options":{},"requiresNative":false,"timeoutSeconds":60,"success":"r.passed","meaning":"Synthetic accepted-state stopping windows, complete F/Q regional gates, candidate invalidation and resume semantics; no physical steady solution or mesh qualification."},
-    {"id":"arch","group":"quick","function":"test_arch","call":"output","options":{},"requiresNative":true,"timeoutSeconds":120,"success":"r.passed","meaning":"Public state, context, reference identity and read-only sampling assertions."},
-    {"id":"runtime","group":"quick","function":"test_runtime","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Short restart, portable identities, accepted-pointer transactions and read-only legacy imports."},
-    {"id":"native","group":"quick","function":"test_ipm_cr_native","call":"output_options","options":{},"requiresNative":true,"timeoutSeconds":120,"success":"r.passed","meaning":"Local polynomial, constant, reconstruction, velocity-Jacobian and CFL checks; not global accuracy."},
-    {"id":"main","group":"components","function":"test_main","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Short expression-initialized main entrypoint from a foreign cwd, project-relative Unicode output, immutable native input and I/P/C, restart, all-stage CFL, and accepted data/UTF-8 summary identity; no trajectory accuracy qualification."},
-    {"id":"release","group":"components","function":"test_release","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Short native run, exact zero initial residual, accepted-state stops, resumable stopping state and SHA-bound native field export; no steady-state qualification."},
-    {"id":"step","group":"components","function":"test_step_api","call":"output_options","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed&&r.requestedChecksSatisfied&&r.sourceUnchanged","meaning":"Current explicit time policies, mandatory prepared context and rejection paths; historical frozen trajectories are explicitly skipped."},
-    {"id":"elliptic","group":"components","function":"test_ipm_cr","call":"output_options","options":{"includeIsolatedRefinement":true},"requiresNative":false,"timeoutSeconds":180,"success":"r.passed","meaning":"Independent exact-source, streamfunction and velocity manufactures, including isolated patch refinements."},
-    {"id":"connection","group":"components","function":"test_ipm_cr_connection_operators","call":"output_options","options":{},"requiresNative":false,"timeoutSeconds":180,"success":"r.passedStructuralAndPolynomialChecks&&r.sourceHashesUnchanged&&strcmp(r.status,'completed_static_connection_measurements')","meaning":"Structural, constant and polynomial assertions; raw static order measurements remain separate."},
-    {"id":"background","group":"components","function":"test_ipm_cr_background","call":"output_options","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.allRequestedChecksPassed&&r.sourceHashesUnchanged","meaning":"Independent centered-background arithmetic, kinematics and original-datum source reconstruction."},
-    {"id":"superposition","group":"components","function":"test_ipm_cr_superposition","call":"output","options":{},"requiresNative":false,"timeoutSeconds":180,"success":"r.passed","meaning":"Same discrete Poisson systems and original backward-error gates; not a continuum certificate."},
-    {"id":"tail","group":"components","function":"test_ipm_cr_tail_background","call":"output_options","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.allRequestedChecksPassed&&r.sourcesUnchanged","meaning":"Independent initial dipole moment, Green integral, analytic derivatives and complete RHS identities."},
-    {"id":"gauge","group":"components","function":"test_ipm_cr_gauge_acceleration","call":"output_options","options":{"includeInitial":true,"includeTau200":false},"requiresNative":true,"timeoutSeconds":180,"success":"r.allChecksPassed&&r.requestedChecksSatisfied&&r.sourceHashesUnchanged","meaning":"Initial-state exact transport Jacobian and two gauge solvers on the same physical field; historical checkpoint explicitly skipped."},
-    {"id":"radial","group":"components","function":"test_ipm_cr_radial_redistribution","call":"output_options","options":{"baselineStudyDir":""},"requiresNative":true,"timeoutSeconds":180,"success":"r.structuralChecksPassed&&r.sourceHashesUnchanged&&r.allResolvedOrdersAtLeastFour&&strcmp(r.status,'completed_static_redistribution_measurements')","qualification":"r.spatialQualificationPassed","meaning":"Protected geometry and resolved static orders pass; unresolved roundoff-limited pairs do not become a spatial qualification."},
-    {"id":"solver_state","group":"components","function":"test_solver_state_integrity","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Compensated stage/endpoint clocks, two short RK policies, stable full-F assembly and explicitly measured Q versus discrete F derivative; not long-time accuracy."},
-    {"id":"solver_gauge","group":"components","function":"test_solver_gauge_integrity","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Conditioned gauge roots, nonunique-peak rejection, independent full IPC audit, unchanged wall definitions and measured quadrature bias."},
-    {"id":"solver_poisson","group":"components","function":"test_solver_poisson_integrity","call":"output","options":{},"requiresNative":false,"timeoutSeconds":180,"success":"r.passed","meaning":"Native reconstruction defect, supplementary gates, cached evaluation, sparse/dense modal equivalence and includePsi behavior; no continuum certificate."},
-    {"id":"solver_transport","group":"components","function":"test_solver_transport_integrity","call":"output","options":{},"requiresNative":true,"timeoutSeconds":180,"success":"r.passed","meaning":"Unprovided outer inflow fails closed, explicit report mode, unchanged outflow/CFL and measured derivative-cache candidate without a speedup assumption."},
-    {"id":"order","group":"research","function":"test_ipm_cr_fourth_order","call":"output_options","options":{},"requiresNative":true,"timeoutSeconds":3600,"success":"r.sourcesUnchanged&&any(strcmp(r.status,{'completed_requested_fourth_order_screens','completed_measurements_qualification_incomplete'}))","qualification":"r.globalFourthOrderQualified","meaning":"Requested spatial/Poisson/temporal measurements completed; fourth-order qualification is a separate result."},
-    {"id":"ivp","group":"research","function":"test_ipm_cr_ivp_spatial","call":"output_options","options":{"checkpointed":true,"wallSecondsTotal":3600},"requiresNative":true,"timeoutSeconds":3900,"success":"r.sourcesUnchanged&&any(strcmp(r.status,{'completed_short_IVP_fourth_order_screens','completed_short_IVP_measurements_not_qualified'}))","qualification":"r.fullIVPShortWindowQualified","meaning":"Three complete original-datum trajectories and requested time control; a completed unqualified study remains unqualified."},
-    {"id":"endpoint","group":"research","function":"inspect_ipm_cr_explicit_endpoint","call":"options_only","options":{"checkpointFolder":{"$input":"checkpoint"}},"inputs":{"checkpoint":"checkpoint"},"requiresNative":true,"timeoutSeconds":600,"success":"strcmp(r.status,'completed_strict_finite_resolution_comparison')&&r.acceptedCheckpointFileUnchanged&&r.sourceIdentitiesUnchanged","meaning":"Strict fixed accepted-state Poisson refinement; requires matching current source identity, not a trajectory accuracy certificate."},
-    {"id":"backward","group":"research","function":"diagnose_ipm_cr_poisson_backward","call":"output_options","options":{},"requiresNative":false,"timeoutSeconds":300,"success":"r.sourceHashesUnchanged&&strcmp(r.status,'completed_failed_or_accepted_solution_diagnostic')","meaning":"Diagnostic completion only; deliberately retains rejected discrete solutions with requireAccuracy=false and never certifies accuracy."},
-    {"id":"profile","group":"research","function":"profile_ipm_cr_rhs","call":"output_repetitions","options":{"repetitions":40},"requiresNative":true,"timeoutSeconds":300,"success":"isfinite(r.profiledMeanRhsSeconds)&&r.repetitions>0","meaning":"Fixed-state profiled complete RHS cost; no accuracy or speedup assertion."},
-    {"id":"refactor","group":"history","function":"test_ipm_cr_refactor","call":"output_baseline","options":{},"inputs":{"baseline":"file"},"requiresNative":true,"timeoutSeconds":300,"success":"r.passed&&r.sourceHashesUnchanged","meaning":"Exact numeric bytes against an independently frozen baseline; missing external data is skipped, never passed."},
-    {"id":"step_history","group":"history","function":"test_step_api","call":"output_options","options":{"baselineFile":{"$input":"baseline"}},"inputs":{"baseline":"file"},"requiresNative":true,"timeoutSeconds":300,"success":"r.passed&&r.requestedChecksSatisfied&&r.sourceUnchanged&&strcmp(r.baseline.status,'passed_exact_frozen_steps')","meaning":"Explicit independent baseline initial/final fields, short accepted steps, complete step information and common query bytes; no order or long-time qualification."},
-    {"id":"gauge_history","group":"history","function":"test_ipm_cr_gauge_acceleration","call":"output_options","options":{"includeInitial":false,"includeTau200":true,"checkpointFolder":{"$input":"checkpoint"}},"inputs":{"checkpoint":"checkpoint"},"requiresNative":true,"timeoutSeconds":300,"success":"r.allChecksPassed&&r.requestedChecksSatisfied&&r.sourceHashesUnchanged","meaning":"Read-only tau200 density reevaluated using current operators; old flow is not an exact reference."},
-    {"id":"radial_history","group":"history","function":"test_ipm_cr_radial_redistribution","call":"output_options","options":{"baselineStudyDir":{"$input":"baseline_study"}},"inputs":{"baseline_study":"study"},"requiresNative":true,"timeoutSeconds":180,"success":"r.structuralChecksPassed&&r.sourceHashesUnchanged&&r.allResolvedOrdersAtLeastFour&&r.baselineCheckpoint.available&&r.baselineCheckpoint.comparisonPerformed","qualification":"r.spatialQualificationPassed","meaning":"Explicit old level_2 geometry identity check plus current static geometry tests; no silent historical skip."}
+    {
+      "id": "fem_native_grid",
+      "function": "test_fem_native_grid",
+      "meaning": "Exact shared native transport/Poisson axes and coefficients, Galerkin basis/quadrature, source consistency and rejection of independent solution grids.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed&&r.sourcesUnchanged"
+    },
+    {
+      "id": "mainline_accuracy",
+      "function": "test_mainline_accuracy",
+      "meaning": "Actual exact quarter/coarse/medium spatial manufacture, p4/p5 cost-error comparison and production linear5/RK4 fixed-space temporal refinement; finite screens are not continuum certificates.",
+      "group": "research",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 660,
+      "success": "r.passed&&r.sourcesUnchanged",
+      "qualification": "r.qualification.productionSpatialScreenPassed&&r.qualification.completeRK4TimeScreenPassed"
+    },
+    {
+      "id": "mainline_runtime",
+      "function": "test_mainline_runtime",
+      "meaning": "Default linear5 production stepping, shape-trigger calibration without scheduled interpolation, cold recovery of the trigger reference and original adaptive check schedule (0.005 to 0.5 tau, checks are not triggers), original references/clocks and portable atomic native checkpoints; accuracy thresholds belong only to tests.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 300,
+      "success": "r.passed"
+    },
+    {
+      "id": "mainline_mesh",
+      "function": "test_mainline_mesh",
+      "meaning": "Exact stored nonuniform medium/half axes and metrics, active-only physical derivative closures, ghost independence, portable replay, and analytic scalar B_x full/interface fourth-order finite-pair screens.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed"
+    },
+    {
+      "id": "central",
+      "function": "test_central_transport",
+      "meaning": "Fourth-order complete-line derivative, constants and periodic RK4 stability with explicit sixth-order damping.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed"
+    },
+    {
+      "id": "fem_sparse",
+      "function": "test_fem_sparse",
+      "meaning": "Sparse factorization versus modal reference on identical Galerkin weak equations and traces.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed"
+    },
+    {
+      "id": "remesh_region",
+      "function": "test_remesh_region",
+      "meaning": "Static active-owner main wall-connected source-region geometry, subcell crossings and trigger support; no PDE evolution.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 120,
+      "success": "r.passed"
+    },
+    {
+      "id": "remesh",
+      "function": "test_remesh",
+      "meaning": "Shape-triggered same-time remesh, initial calibration without interpolation, cumulative region change and original adaptive check schedule (0.005 to 0.5 tau, checks are not triggers), independent patch transfer, clocks/IPC and cold reconstruction.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed"
+    },
+    {
+      "id": "remesh_order",
+      "function": "test_remesh_order",
+      "meaning": "Three-grid nonpolynomial same-time transfer accuracy of complete W/q/F/Q against direct data on the identical new grid.",
+      "group": "components",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed"
+    },
+    {
+      "id": "config",
+      "group": "quick",
+      "function": "test_config",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 60,
+      "success": "r.passed",
+      "meaning": "Portable configuration, declared method and structural option contracts; numerical accuracy is tested independently."
+    },
+    {
+      "id": "initial",
+      "group": "quick",
+      "function": "test_initial",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 120,
+      "success": "r.passed",
+      "meaning": "Gaussian authority generation, fixed original reference axes, selected configuration, portable manifest/MAT identity and provenance rejections; no PDE initialization integration."
+    },
+    {
+      "id": "steady",
+      "group": "quick",
+      "function": "test_steady",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 60,
+      "success": "r.passed",
+      "meaning": "Synthetic accepted-state stopping windows, complete F/Q regional gates, candidate invalidation and resume semantics; no physical steady solution or mesh qualification."
+    },
+    {
+      "id": "arch",
+      "group": "quick",
+      "function": "test_arch",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 120,
+      "success": "r.passed",
+      "meaning": "Exact public-state/context isolation, independent fresh-RHS tolerance and generic field sampling."
+    },
+    {
+      "id": "runtime",
+      "group": "quick",
+      "function": "test_runtime",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Short restart, portable identities, accepted-pointer transactions and read-only legacy imports."
+    },
+    {
+      "id": "native",
+      "group": "quick",
+      "function": "test_ipm_cr_native",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 120,
+      "success": "r.passed",
+      "meaning": "Local polynomial, constant, reconstruction, velocity-Jacobian and CFL checks; not global accuracy."
+    },
+    {
+      "id": "main",
+      "group": "components",
+      "function": "test_main",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Registered-Gaussian default configuration plus explicit expression-initialized FEM/linear5 entrypoint from a foreign cwd, Unicode output, immutable input and I/P/C, restart, all-stage CFL and native data identity; no trajectory accuracy qualification."
+    },
+    {
+      "id": "release",
+      "group": "components",
+      "function": "test_release",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Short native run, exact zero initial residual, accepted-state stops, resumable stopping state and SHA-bound native field export; no steady-state qualification."
+    },
+    {
+      "id": "step",
+      "group": "components",
+      "function": "test_step_api",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed&&r.requestedChecksSatisfied&&r.sourceUnchanged",
+      "meaning": "Current explicit time policies, mandatory prepared context and rejection paths; historical frozen trajectories are explicitly skipped."
+    },
+    {
+      "id": "elliptic",
+      "group": "components",
+      "function": "test_ipm_cr",
+      "call": "output_options",
+      "options": {
+        "includeIsolatedRefinement": true
+      },
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Independent exact-source, streamfunction and velocity manufactures, including isolated patch refinements."
+    },
+    {
+      "id": "connection",
+      "group": "components",
+      "function": "test_ipm_cr_connection_operators",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passedStructuralAndPolynomialChecks&&r.sourceHashesUnchanged&&strcmp(r.status,'completed_static_connection_measurements')",
+      "meaning": "Structural, constant and polynomial assertions; raw static order measurements remain separate."
+    },
+    {
+      "id": "background",
+      "group": "components",
+      "function": "test_ipm_cr_background",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.allRequestedChecksPassed&&r.sourceHashesUnchanged",
+      "meaning": "Independent centered-background arithmetic, kinematics and original-datum source reconstruction."
+    },
+    {
+      "id": "superposition",
+      "group": "components",
+      "function": "test_ipm_cr_superposition",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Same discrete Poisson systems and original backward-error gates; not a continuum certificate."
+    },
+    {
+      "id": "tail",
+      "group": "components",
+      "function": "test_ipm_cr_tail_background",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.allRequestedChecksPassed&&r.sourcesUnchanged",
+      "meaning": "Independent initial dipole moment, Green integral, analytic derivatives and complete RHS identities."
+    },
+    {
+      "id": "gauge",
+      "group": "components",
+      "function": "test_ipm_cr_gauge_acceleration",
+      "call": "output_options",
+      "options": {
+        "includeInitial": true,
+        "includeTau200": false
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.allChecksPassed&&r.requestedChecksSatisfied&&r.sourceHashesUnchanged",
+      "meaning": "Initial-state exact transport Jacobian and two gauge solvers on the same physical field; historical checkpoint explicitly skipped."
+    },
+    {
+      "id": "radial",
+      "group": "components",
+      "function": "test_ipm_cr_radial_redistribution",
+      "call": "output_options",
+      "options": {
+        "baselineStudyDir": ""
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.structuralChecksPassed&&r.sourceHashesUnchanged&&r.allResolvedOrdersAtLeastFour&&strcmp(r.status,'completed_static_redistribution_measurements')",
+      "qualification": "r.spatialQualificationPassed",
+      "meaning": "Protected geometry and resolved static orders pass; unresolved roundoff-limited pairs do not become a spatial qualification."
+    },
+    {
+      "id": "solver_state",
+      "group": "components",
+      "function": "test_solver_state_integrity",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Compensated stage/endpoint clocks, two short RK policies, stable full-F assembly and explicitly measured Q versus discrete F derivative; not long-time accuracy."
+    },
+    {
+      "id": "solver_gauge",
+      "group": "components",
+      "function": "test_solver_gauge_integrity",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Direct IPC Newton and passive root/peak diagnostics, independent full IPC audit, unchanged wall definitions and measured quadrature bias."
+    },
+    {
+      "id": "solver_poisson",
+      "group": "components",
+      "function": "test_solver_poisson_integrity",
+      "call": "output",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Native reconstruction defect, supplementary gates, cached evaluation, sparse/dense modal equivalence and includePsi behavior; no continuum certificate."
+    },
+    {
+      "id": "solver_transport",
+      "group": "components",
+      "function": "test_solver_transport_integrity",
+      "call": "output",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed",
+      "meaning": "Passive exterior inflow diagnostics, declared polynomial closure, current-rate CFL formula and measured derivative-cache candidate without a speedup assumption."
+    },
+    {
+      "id": "same_mesh",
+      "group": "components",
+      "function": "test_same_mesh_poisson",
+      "call": "output_options",
+      "options": {
+        "wallSeconds": 120
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed&&r.sourcesUnchanged",
+      "meaning": "Explicit reference FD manufactures and spectral zero-source comparison, default FEM identity, analytic-offset separation, native/ghost/overlap errors and four-word clock checks; not a continuum or long-trajectory qualification."
+    },
+    {
+      "id": "fem",
+      "function": "test_fem_poisson",
+      "meaning": "Default sparse FEM/linear5 method, Q4 Galerkin source/trace contracts, nonzero-wall smooth problem, analytic split and complete RHS; separate wall test qualifies the finite-disk corner order.",
+      "group": "components",
+      "call": "output_options",
+      "options": {
+        "wallSeconds": 120
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.passed&&r.sourcesUnchanged"
+    },
+    {
+      "id": "fem_green",
+      "function": "test_fem_green",
+      "meaning": "Analytic polynomial Green fields against independent image-Green quadrature and SciPy dilogarithm fixtures, including nonzero-source outer-wall corners.",
+      "group": "components",
+      "call": "output_options",
+      "options": {
+        "wallSeconds": 120
+      },
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed&&r.sourcesUnchanged"
+    },
+    {
+      "id": "fem_wall",
+      "function": "test_fem_wall",
+      "meaning": "Independent radial-source Green refinement with nonzero source at both outer-wall corners; full native/ghost/off-mesh velocity, raw negative control and unchanged weak/trace gates.",
+      "group": "components",
+      "call": "output_options",
+      "options": {
+        "wallSeconds": 120
+      },
+      "requiresNative": false,
+      "timeoutSeconds": 180,
+      "success": "r.passed&&r.sourcesUnchanged"
+    },
+    {
+      "id": "order",
+      "group": "research",
+      "function": "test_ipm_cr_fourth_order",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": true,
+      "timeoutSeconds": 3600,
+      "success": "r.sourcesUnchanged&&any(strcmp(r.status,{'completed_requested_fourth_order_screens','completed_measurements_qualification_incomplete'}))",
+      "qualification": "r.globalFourthOrderQualified",
+      "meaning": "Explicit spectral/linear5 fixed-geometry reference spatial/Poisson/time study; qualification is separate and does not certify the new mainline."
+    },
+    {
+      "id": "ivp",
+      "group": "research",
+      "function": "test_ipm_cr_ivp_spatial",
+      "call": "output_options",
+      "options": {
+        "checkpointed": true,
+        "wallSecondsTotal": 3600
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 3900,
+      "success": "r.sourcesUnchanged&&any(strcmp(r.status,{'completed_short_IVP_fourth_order_screens','completed_short_IVP_measurements_not_qualified'}))",
+      "qualification": "r.fullIVPShortWindowQualified",
+      "meaning": "Explicit spectral/linear5 fixed-mesh reference: three original-datum trajectories and requested time control; an unqualified study remains unqualified and is not new-mainline acceptance."
+    },
+    {
+      "id": "endpoint",
+      "group": "research",
+      "function": "inspect_ipm_cr_explicit_endpoint",
+      "call": "options_only",
+      "options": {
+        "checkpointFolder": {
+          "$input": "checkpoint"
+        }
+      },
+      "inputs": {
+        "checkpoint": "checkpoint"
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 600,
+      "success": "strcmp(r.status,'completed_strict_finite_resolution_comparison')&&r.acceptedCheckpointFileUnchanged&&r.sourceIdentitiesUnchanged",
+      "meaning": "Strict fixed accepted-state Poisson refinement; requires matching current source identity, not a trajectory accuracy certificate."
+    },
+    {
+      "id": "backward",
+      "group": "research",
+      "function": "diagnose_ipm_cr_poisson_backward",
+      "call": "output_options",
+      "options": {},
+      "requiresNative": false,
+      "timeoutSeconds": 300,
+      "success": "r.sourceHashesUnchanged&&strcmp(r.status,'completed_failed_or_accepted_solution_diagnostic')",
+      "meaning": "Diagnostic completion only; deliberately retains rejected discrete solutions with requireAccuracy=false and never certifies accuracy."
+    },
+    {
+      "id": "profile",
+      "group": "research",
+      "function": "profile_ipm_cr_rhs",
+      "call": "output_repetitions",
+      "options": {
+        "repetitions": 40
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 300,
+      "success": "isfinite(r.profiledMeanRhsSeconds)&&r.repetitions>0",
+      "meaning": "Fixed-state profiled complete RHS cost; no accuracy or speedup assertion."
+    },
+    {
+      "id": "refactor",
+      "group": "history",
+      "function": "test_ipm_cr_refactor",
+      "call": "output_baseline",
+      "options": {},
+      "inputs": {
+        "baseline": "file"
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 300,
+      "success": "r.passed&&r.sourceHashesUnchanged",
+      "meaning": "Exact numeric bytes against an independently frozen baseline; missing external data is skipped, never passed."
+    },
+    {
+      "id": "step_history",
+      "group": "history",
+      "function": "test_step_api",
+      "call": "output_options",
+      "options": {
+        "baselineFile": {
+          "$input": "baseline"
+        }
+      },
+      "inputs": {
+        "baseline": "file"
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 300,
+      "success": "r.passed&&r.requestedChecksSatisfied&&r.sourceUnchanged&&strcmp(r.baseline.status,'passed_exact_frozen_steps')",
+      "meaning": "Explicit independent baseline initial/final fields, short accepted steps, complete step information and common query bytes; no order or long-time qualification."
+    },
+    {
+      "id": "gauge_history",
+      "group": "history",
+      "function": "test_ipm_cr_gauge_acceleration",
+      "call": "output_options",
+      "options": {
+        "includeInitial": false,
+        "includeTau200": true,
+        "checkpointFolder": {
+          "$input": "checkpoint"
+        }
+      },
+      "inputs": {
+        "checkpoint": "checkpoint"
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 300,
+      "success": "r.allChecksPassed&&r.requestedChecksSatisfied&&r.sourceHashesUnchanged",
+      "meaning": "Read-only tau200 density reevaluated using current operators; old flow is not an exact reference."
+    },
+    {
+      "id": "radial_history",
+      "group": "history",
+      "function": "test_ipm_cr_radial_redistribution",
+      "call": "output_options",
+      "options": {
+        "baselineStudyDir": {
+          "$input": "baseline_study"
+        }
+      },
+      "inputs": {
+        "baseline_study": "study"
+      },
+      "requiresNative": true,
+      "timeoutSeconds": 180,
+      "success": "r.structuralChecksPassed&&r.sourceHashesUnchanged&&r.allResolvedOrdersAtLeastFour&&r.baselineCheckpoint.available&&r.baselineCheckpoint.comparisonPerformed",
+      "qualification": "r.spatialQualificationPassed",
+      "meaning": "Explicit old level_2 geometry identity check plus current static geometry tests; no silent historical skip."
+    }
   ]
 }

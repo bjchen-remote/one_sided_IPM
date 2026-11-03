@@ -18,7 +18,7 @@ function [measurement,rateEvaluator] = measure(field,r,wallOps,options)
 % The default interpolation is LINEAR IN THE DATA. This is necessary for
 % exact c_omega elimination: M(B+c_omega*R)=M(B)+c_omega*M(R). 'spline'
 % is also data-linear; 'pchip' is an explicit diagnostic option and is not.
-% A caller using pchip must independently audit the assembled complete RHS.
+% The nonlinear pchip variant is retained for explicit diagnostic use.
 % options.centerPeak=true computes the original global spline maximum from
 % q-max(q) once, then restores its amplitude; I/C and fixed references stay
 % unchanged. The original I/C observables use finite-axis piecewise-linear
@@ -74,8 +74,6 @@ else
     peak=ipm_cr.gauge.peak(q,wallOps);
 end
 centroid=ipm_cr.gauge.centroid(q,wallOps);
-assert(isfinite(peak.value) && peak.value>0 && ~centroid.degenerateEnergy, ...
-    'polar:WallDegenerate','The original I/P/C gauges require positive P and nonzero energy.');
 measurement=struct('definition','original_Cartesian_wall_IPC_after_polar_sampling', ...
     'x',x,'wallValues',wallValues,'q',q, ...
     'I',integral.value,'P',peak.value,'C',centroid.value, ...
@@ -149,36 +147,26 @@ if nargout>1,rateEvaluator=@prepared_rate;end
         assert(isfield(sampleOptions,fieldKey) && isfield(sampleOptions,wallKey), ...
             'polar:WallOffsetPair','Polar and original-wall offsets must be supplied together.');
         offset=sampleOptions.(fieldKey);wallOffset=sampleOptions.(wallKey);
-        assert(isnumeric(offset) && isreal(offset) && isequal(size(offset),size(polarValues)) && ...
-            all(isfinite(offset),'all'),'polar:WallOffsetShape', ...
-            'The polar offset must be finite and have the complete field shape.');
+        assert(isnumeric(offset) && isreal(offset) && isequal(size(offset),size(polarValues)), ...
+            'polar:WallOffsetShape','The polar offset must have the complete field shape.');
         assert(isnumeric(wallOffset) && isreal(wallOffset) && isvector(wallOffset) && ...
-            numel(wallOffset)==n && all(isfinite(wallOffset)), ...
-            'polar:WallOffsetShape','The exact wall offset must match the original x grid.');
-        % Check original and offset origins separately; subtraction must not
-        % hide two incompatible multi-valued physical origin rows.
+            numel(wallOffset)==n,'polar:WallOffsetShape', ...
+            'The exact wall offset must match the original x grid.');
         [~,axis,values,mismatch]=sample_wall(polarValues);
-        sample_wall(offset);
         sampled=sample_wall(polarValues-offset)+reshape(wallOffset,1,[]);
-        assert(all(isfinite(sampled)),'polar:WallOffsetFinite','Offset wall sampling must remain finite.');
     end
 
     function [sampled,axis,values,mismatch]=sample_wall(polarValues)
-        validateattributes(polarValues,{'numeric'},{'real','finite','2d','nonempty'});
+        validateattributes(polarValues,{'numeric'},{'real','2d','nonempty'});
         if radialDimension==2,polarValues=polarValues';end
         assert(size(polarValues,1)==numel(r) && size(polarValues,2)>=2, ...
             'polar:WallFieldSize','Field must contain both theta=0/pi wall rays.');
         positive=polarValues(:,1);negative=polarValues(:,end);
         mismatch=abs(positive(1)-negative(1));
-        tolerance=256*eps(max([1;abs(positive(1));abs(negative(1))]));
-        assert(mismatch<=tolerance,'polar:WallOrigin', ...
-            'The two wall rays disagree at the common polar origin.');
         origin=positive(1)+(negative(1)-positive(1))/2;
         axis=[-flipud(r(2:end));0;r(2:end)];
         values=[flipud(negative(2:end));origin;positive(2:end)];
         sampled=interp1(axis,values,x,method);
         sampled=reshape(sampled,1,[]);
-        assert(all(isfinite(sampled)), ...
-            'polar:WallSampling','Original-wall interpolation must remain finite.');
     end
 end

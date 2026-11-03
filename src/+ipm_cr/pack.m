@@ -25,6 +25,9 @@ data=struct('format','ipm_cr_science_v1','createdUtc',ipm_cr.io.identity('utc'),
         'delta',s.rhs.delta,'Uref',s.rhs.Uref), ...
     'gauge',struct('measurement',s.rhs.measurement,'residual',s.rhs.gaugeResidual), ...
     'poisson',s.rhs.poisson,'meta',meta,'mesh',struct(),'fields',struct());
+if isfield(s,'remesh'),data.remeshController=s.remesh;end
+if isfield(s,'import'),data.seedImport=s.import;end
+data.geometryKey=ctx.mesh.geometryKey;
 for patch={'core','polar'}
     key=patch{1};g=ctx.mesh.(key);
     grid=struct('X',g.X,'Y',g.Y,'active',g.active,'ghost',g.ghost);

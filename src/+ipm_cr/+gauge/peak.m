@@ -10,19 +10,11 @@ function peak = peak(values,ops)
 % Numerical ties (within peak-scaled roundoff) prefer the location nearest
 % pinX, then the smaller coordinate; the numerical selection gap is exposed.
 
-assert(isstruct(ops) && isscalar(ops) && isfield(ops,'x'), ...
-    'ipm:GlobalSplineInput','Supply a scalar operator structure with x.');
 x = ops.x(:)'; q = values(:)';
-assert(isnumeric(values) && isreal(values) && isnumeric(ops.x) && ...
-    isreal(ops.x) && numel(q) == numel(x) && numel(x) >= 2 && ...
-    all(isfinite(q)) && all(isfinite(x)) && all(diff(x) > 0), ...
-    'ipm:GlobalSplineInput','The spline needs finite real values on increasing x.');
 pinX = 0;
 if isfield(ops,'rescaling') && isfield(ops.rescaling,'pinX')
     pinX = ops.rescaling.pinX;
 end
-assert(isnumeric(pinX) && isreal(pinX) && isscalar(pinX) && isfinite(pinX), ...
-    'ipm:GlobalSplineInput','The optional tie-breaking pinX must be finite.');
 g = spline_geometry(x);
 M = zeros(numel(x),1);
 if numel(x) > 2

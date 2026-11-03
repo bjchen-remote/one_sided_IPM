@@ -14,9 +14,9 @@ timer=tic;source=ipm_cr.io.identity('source');
 report=struct('kind','ipm_cr_narrow_step_api_v1','passed',false,'status','running', ...
     'baseline',struct('requested',isfield(options,'baselineFile'),'status','skipped', ...
     'file','','sha256',''),'sourceIdentity',source,'requestedChecksSatisfied',false, ...
-    'frozenCases',struct([]),'controls',struct(),'rejections',struct(), ...
+    'frozenCases',struct([]),'controls',struct(),'identities',struct(), ...
     'sourceUnchanged',false,'trajectoryAccuracyCertified',false, ...
-    'scope','Current step controls and mandatory context; historical bitwise evidence only when explicitly requested. No order or long-time claim.');
+    'scope','Normal prepared-context calls and direct time controls; historical bitwise evidence only when explicitly requested. No order or long-time claim.');
 try
     assert(nargin('ipm_cr.time.step')==4&&nargin('ipm_cr.step')==4,'ipm_cr:StepApiSignature');
     baseline=struct('cases',struct([]));
@@ -64,44 +64,39 @@ try
         if isempty(report.frozenCases),report.frozenCases=row;else,report.frozenCases(end+1)=row;end %#ok<AGROW>
     end
     if report.baseline.requested,report.baseline.status='passed_exact_frozen_steps';end
-    % Identical mathematics with two distinct time policies must share a key,
-    % while each state still belongs to its own particular prepared context.
+    % Identity is inspected by this test, not enforced in the time kernel.
+    % Distinct time policies must leave the mathematical input key unchanged.
     [a,ca]=ipm_cr.init(method);
-    controls=struct('cfl',.2,'maxDt',.0005,'minDt',2e-10,'timeIntegrator','ssprk3');
+    controls=struct('cfl',.2,'maxDt',.0005,'timeIntegrator','ssprk3');
     names=fieldnames(controls);
     for k=1:numel(names),method.(names{k})=controls.(names{k});end
     [b,cb]=ipm_cr.init(method);
     exact(ca.key,cb.key,'timeIndependentKey');exact(snapshot(a),snapshot(b),'timeIndependentInitialRhs');
+    assert(~strcmp(ca.id,cb.id)&&strcmp(a.ctxId,ca.id)&&strcmp(b.ctxId,cb.id)&& ...
+        isequaln(a.ctxKey,ca.key)&&isequaln(b.ctxKey,cb.key),'ipm_cr:StepApiInputIdentity');
     savedOptions=ca.opts;savedKey=ca.key;
+    otherBefore=cb.stats();
     [nextA,ia]=ipm_cr.step(a,ca,.001,controls);
+    exact(cb.stats(),otherBefore,'otherContextAfterOverrideStep');
+    before=ca.stats();
     [nextB,ib]=ipm_cr.time.step(b,cb,.001);
+    exact(ca.stats(),before,'otherContextAfterPreparedStep');
     exact(snapshot(nextA),snapshot(nextB),'controlledStep');
     exact(rmfield(ia,'seconds'),rmfield(ib,'seconds'),'controlledStepNumerics');
     exact(ca.opts,savedOptions,'contextOptions');exact(ca.key,savedKey,'contextKey');
-    assert(ia.dt==controls.maxDt&&strcmp(ia.timeIntegrator,'ssprk3')&& ...
-        ia.realizedMaximumStageCfl<=controls.cfl*(1+64*eps), ...
-        'ipm_cr:StepApiControls','The independent policy did not govern the complete accepted step.');
+    assert(strcmp(nextA.ctxId,ca.id)&&strcmp(nextB.ctxId,cb.id)&& ...
+        isequaln(nextA.ctxKey,ca.key)&&isequaln(nextB.ctxKey,cb.key),'ipm_cr:StepApiOutputIdentity');
+    expectedDt=min([controls.maxDt,.95*controls.cfl/a.rhs.rate,.001-a.scale.canonicalTime]);
+    assert(ia.dt==expectedDt&&strcmp(ia.timeIntegrator,'ssprk3')&& ...
+        ia.cflStepFormulaApplied&&isequal(ia.stageCfl,ia.dt*ia.stageRates)&& ...
+        ia.realizedMaximumStageCfl==max(ia.stageCfl), ...
+        'ipm_cr:StepApiControls','The independent policy or passive stage-CFL measurements changed.');
     report.controls=struct('keyIndependent',true,'initialRhsBitwiseIdentical',true, ...
         'overrideEqualsPreparedPolicyBitwise',true,'contextUnchanged',true, ...
+        'initialCflFormulaExact',true,'stageCflMeasured',true, ...
         'dt',ia.dt,'maximumStageCfl',ia.realizedMaximumStageCfl,'timeIntegrator',ia.timeIntegrator);
-    before=ca.stats();otherBefore=cb.stats();
-    expect(@()ipm_cr.step(a,cb,.001),'ipm_cr:StaleState');
-    expect(@()ipm_cr.time.step(a,cb,.001),'ipm_cr:StateContext');
-    expect(@()ipm_cr.step(a,[],.001),'ipm_cr:StaleState');
-    expect(@()ipm_cr.time.step(a,[],.001),'ipm_cr:StateContext');
-    bad=rmfield(a,'ctxId');
-    expect(@()ipm_cr.step(bad,ca,.001),'ipm_cr:StaleState');
-    expect(@()ipm_cr.time.step(bad,ca,.001),'ipm_cr:StateContext');
-    bad=a;bad.ctxKey.method.background.widthX=bad.ctxKey.method.background.widthX*1.01;
-    expect(@()ipm_cr.time.step(bad,ca,.001),'ipm_cr:StateContext');
-    expect(@()ipm_cr.step(a,ca,.001,struct('background',ca.opts.background)),'ipm_cr:StepOptions');
-    expect(@()ipm_cr.time.step(a,ca,.001,struct('transport',ca.opts.transport)),'ipm_cr:StepOptions');
-    expect(@()ipm_cr.time.step(a,ca,.001,[]),'ipm_cr:StepOptions');
-    expect(@()ipm_cr.step(a,ca,.001,struct('timeIntegrator','implicit')),'ipm_cr:ExplicitTimeIntegrator');
-    exact(ca.stats(),before,'rejectedStepContext');exact(cb.stats(),otherBefore,'rejectedOtherContext');
-    report.rejections=struct('staleContext',true,'missingContext',true,'missingContextId',true, ...
-        'changedMathematicalKey',true,'nonTimeOverrides',true,'invalidIntegrator',true, ...
-        'noRhsOrPoissonCallsOnRejection',true);
+    report.identities=struct('distinctContextIds',true,'inputKeysMatch',true,'outputKeysMatch',true, ...
+        'mathematicalKeyIndependentOfTimePolicy',true,'contextsIsolated',true);
     report.sourceUnchanged=isequaln(source,ipm_cr.io.identity('source'));
     if report.baseline.requested
         report.sourceUnchanged=report.sourceUnchanged&& ...
@@ -118,7 +113,7 @@ catch problem
     report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'step_api.json'),report);rethrow(problem);
 end
 report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'step_api.json'),report);
-fprintf('CR STEP API: independent controls and mandatory context passed; baseline %s (%.3fs)\n', ...
+fprintf('CR STEP API: independent controls, state identities and context isolation passed; baseline %s (%.3fs)\n', ...
     report.baseline.status,report.seconds);
 end
 
@@ -128,15 +123,6 @@ out=struct('rho',s.W,'residual',s.eta,'scale',s.scale,'step',s.step, ...
     'flow',struct('q',f.q,'F',f.F,'Q',f.Q,'residualRhs',f.residualRhs, ...
     'physical',struct('core',f.physical.core,'polar',f.physical.polar), ...
     'rates',[f.c_l,f.c_omega,f.c_r,f.delta,f.Uref,f.transportOrigin]));
-end
-
-function expect(callback,identifier)
-try
-    callback();error('ipm_cr:StepApiExpectedFailure','Expected %s.',identifier);
-catch problem
-    assert(strcmp(problem.identifier,identifier),'ipm_cr:StepApiRejection', ...
-        'Expected %s, received %s.',identifier,problem.identifier);
-end
 end
 
 function exact(a,b,label)

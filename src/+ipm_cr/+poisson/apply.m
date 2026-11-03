@@ -86,7 +86,7 @@ end
 
 
 function values=apply_map(map,source)
-values=reshape(map.core*source.core(:)+map.polar*source.polar(:),map.shape);
+values=ipm_cr.mesh.sample(source,map);
 assert(all(isfinite(values),'all'),'ipm_cr:ExplicitPoissonSourceMap', ...
     'A complete spectral source interpolation became nonfinite.');
 end
@@ -99,10 +99,24 @@ if c.coreSeparable
     ux=-By*(sc.Dy*solution.core.psi)*Bx';
     uy=By*(solution.core.psi*sc.Dx')*Bx';
 else
-    fields={'u1','u2'};if includePsi,fields=[{'psi'},fields];end
-    v=c.solver.evaluate(solution,g.core.X,g.core.Y,fields);
-    psi=[];if includePsi,psi=v.psi;end
-    ux=v.u1;uy=v.u2;
+    m=c.returnCorePlan;p=c.solver.Polar;shape=size(g.core.X);
+    ux=nan(shape);uy=ux;psi=[];if includePsi,psi=ux;end
+    rows=m.coreRows;columns=m.coreColumns;By=m.coreY;Bx=m.coreX;
+    if ~isempty(rows)&&~isempty(columns)
+        if includePsi,psi(rows,columns)=By*solution.core.psi*Bx';end
+        ux(rows,columns)=-By*(sc.Dy*solution.core.psi)*Bx';
+        uy(rows,columns)=By*(solution.core.psi*sc.Dx')*Bx';
+    end
+    for k=1:p.nPanels
+        q=m.panels{k};ii=q.indices;if isempty(ii),continue;end
+        U=solution.polar.psi(p.panelIndices{k},:);
+        sampled=q.radial*U;
+        if includePsi,psi(ii)=sum(sampled.*q.angular,2);end
+        dt=sum((q.radial*(p.panelD{k}*U)).*q.angular,2);
+        da=sum(sampled.*q.angularDerivative,2);
+        ux(ii)=-(q.sinTheta.*dt+q.cosTheta.*da)./q.radius;
+        uy(ii)=(q.cosTheta.*dt-q.sinTheta.*da)./q.radius;
+    end
 end
 wall=g.core.Y==0;if includePsi,psi(wall)=0;end;uy(wall)=0;
 assert(all(isfinite(psi),'all')&&all(isfinite(ux),'all')&&all(isfinite(uy),'all'), ...

@@ -19,22 +19,17 @@ c.domain.rmax=1e10;               % common transport and Poisson radius
 c.initial='data/initial.json';    % used when rho0=[] or when calling main(c)
 
 % Write any vectorized initial density here; no Gaussian parameter fit.
-rho0=@(x,y) (1+tanh(x)).*exp(-y.^2);
+rho0=[];                         % original registered Gaussian datum
+% rho0=@(x,y) (1+tanh(x)).*exp(-y.^2); % optional vectorized alternative
 % Set rho0=[] to use c.initial unchanged.
 
-% Explicit medium transport mesh and independent spectral Poisson grid.
-h=.03;
-c.method.geometry=struct('coreSpacing',h,'coreHalfWidth',1.2,'coreHeight',1.2, ...
-    'grid',struct('nr',385,'ntheta',129,'firstSpacing',h), ...
-    'radialRedistribution',struct('enabled',true,'factor',2, ...
-    'preserveRadius',4,'fullRefinementRadius',20));
-c.method.solverOptions=struct('coreDegree',[64,64],'angularDegree',80, ...
-    'polarDegree',20,'requireAccuracy',true);
+% Actual nonuniform medium axes; coarse is their exact every-other subset.
+c.method.geometry=struct('preset','medium'); % 'coarse' halves each axis
+c.method.poissonBackend='fem';
+c.method.remesh=struct('enabled',true);
 c.method.timeIntegrator='rk4';
-c.method.cfl=.3;                  % checked at every stage and accepted end
+c.method.cfl=.3;                  % current-rate step formula; stages are observed
 c.stop.physicalTime=[];           % optional original-physical-time threshold
-c.stop.steady.enabled=false;      % full F/Q and window candidate checks
-c.stop.steady.minTau=200;
 c.save.data=true;                 % native fields, geometry, scales and SHA
 c.save.history=true;
 c.save.label='main';
@@ -66,9 +61,11 @@ if isfield(input,'run')&&isfield(input.run,'outputDir')
 end
 % Validate controls before building or generating any input files.
 [~,method]=ipm_cr.config(input,'run');
-if ~strcmp(method.transport.reconstruction,'legacy_weno5')
+nativeTransport=any(strcmp(method.transport.reconstruction,{'linear5','smooth_weno5'}));
+samplingBinary=fullfile(root,'src','+ipm_cr','+mesh',['sampleMex.',mexext]);
+if nativeTransport||~isfile(samplingBinary)
     binary=fullfile(root,'src','+ipm_cr','+op',['wenoMex.',mexext]);
-    if ~isfile(binary)
+    if ~isfile(binary)||~isfile(samplingBinary)
         fprintf('Building the local %s kernel...\n',mexext);
         try
             build_ipm_cr_native();
@@ -81,9 +78,9 @@ if ~strcmp(method.transport.reconstruction,'legacy_weno5')
         end
         rehash;
     end
-    selected=which('ipm_cr.op.wenoMex');
+    selected=which('ipm_cr.mesh.sampleMex');
     assert(~isempty(selected)&&strcmp(char(java.io.File(selected).getCanonicalPath()), ...
-        char(java.io.File(binary).getCanonicalPath())), ...
+        char(java.io.File(samplingBinary).getCanonicalPath())), ...
         'ipm_cr:MainKernel','The current project platform kernel is not on the MATLAB path.');
 end
 if ~isempty(density)
