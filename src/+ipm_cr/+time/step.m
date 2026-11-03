@@ -1,7 +1,7 @@
 function [out,info]=step(state,ctx,finalTau,controls)
 %STEP One explicit step; numerical verification belongs to the test suite.
 % CFL selects the initial interval. RK4 partitions ordinary continuous peak
-% crossings of original spline knots by four secant iterates of S_x=0.
+% crossings of original spline knots by up to four secant iterates of S_x=0.
 % Numerical diagnostics never accept/reject a state or select a fallback.
 if nargin<4,controls=struct();end
 policy=struct('cfl',ctx.opts.cfl,'maxDt',ctx.opts.maxDt, ...
@@ -89,7 +89,9 @@ if ~(c0<0&&c1<0&&v0*v1<=0),return;end
 p.fitted=true;p.knotIndex=node;p.knotX=knots(node);
 previousH=0;previousValue=v0;value=v1;
 for iteration=1:4
-    if value==0,break;end
+    % Equal function values do not define a secant. Keep the last computed
+    % trial; no new time interval can be obtained from this pair.
+    if value==0||value==previousValue,break;end
     nextH=h-value*(h-previousH)/(value-previousValue);
     if nextH==h,break;end
     previousH=h;previousValue=value;h=nextH;

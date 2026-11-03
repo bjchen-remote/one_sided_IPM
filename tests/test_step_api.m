@@ -2,18 +2,27 @@ function report=test_step_api(outputDir,options)
 %TEST_STEP_API Explicit context/time-control ownership, optional frozen oracle.
 % OPTIONS.baselineFile explicitly requests a historical MAT comparison;
 % optional baselineSHA256 binds that input. The default has no old-data need.
+% The four failureState/geometryCheckpoint file/SHA options together request
+% the real secant-zero regression on frozen checkpoint spatial matrices.
 root=fileparts(fileparts(mfilename('fullpath')));addpath(fullfile(root,'src'));
 if nargin<1,outputDir=fullfile(root,'results','step_api');end
 if nargin<2,options=struct();end
 assert(isstruct(options)&&isscalar(options)&& ...
-    all(ismember(fieldnames(options),{'baselineFile','baselineSHA256'})), ...
-    'ipm_cr:StepApiOptions','Use baselineFile and optional baselineSHA256.');
+    all(ismember(fieldnames(options),{'baselineFile','baselineSHA256', ...
+    'failureStateFile','failureStateSHA256','geometryCheckpointFile','geometryCheckpointSHA256'})), ...
+    'ipm_cr:StepApiOptions','Use baseline options or all four failure-state/geometry-checkpoint file/SHA options.');
+failureFields={'failureStateFile','failureStateSHA256','geometryCheckpointFile','geometryCheckpointSHA256'};
+failurePresent=isfield(options,failureFields);
+assert(~any(failurePresent)||all(failurePresent),'ipm_cr:StepApiOptions', ...
+    'The failure-state and geometry-checkpoint files and both SHA256 values must be supplied together.');
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'step_api.json')),'ipm_cr:StepApiOutput','Use a fresh output directory.');
 timer=tic;source=ipm_cr.io.identity('source');
 report=struct('kind','ipm_cr_narrow_step_api_v1','passed',false,'status','running', ...
     'baseline',struct('requested',isfield(options,'baselineFile'),'status','skipped', ...
     'file','','sha256',''),'sourceIdentity',source,'requestedChecksSatisfied',false, ...
+    'failureRegression',struct('requested',all(failurePresent),'performed',false, ...
+    'status','skipped','passed',false,'reason','No external real-failure fixture requested.'), ...
     'frozenCases',struct([]),'controls',struct(),'identities',struct(), ...
     'sourceUnchanged',false,'trajectoryAccuracyCertified',false, ...
     'scope','Normal prepared-context calls and direct time controls; historical bitwise evidence only when explicitly requested. No order or long-time claim.');
@@ -97,6 +106,10 @@ try
         'dt',ia.dt,'maximumStageCfl',ia.realizedMaximumStageCfl,'timeIntegrator',ia.timeIntegrator);
     report.identities=struct('distinctContextIds',true,'inputKeysMatch',true,'outputKeysMatch',true, ...
         'mathematicalKeyIndependentOfTimePolicy',true,'contextsIsolated',true);
+    if report.failureRegression.requested
+        [report.failureRegression,failureProblem]=failure_regression(options);
+        if ~isempty(failureProblem),rethrow(failureProblem);end
+    end
     report.sourceUnchanged=isequaln(source,ipm_cr.io.identity('source'));
     if report.baseline.requested
         report.sourceUnchanged=report.sourceUnchanged&& ...
@@ -113,8 +126,105 @@ catch problem
     report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'step_api.json'),report);rethrow(problem);
 end
 report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'step_api.json'),report);
-fprintf('CR STEP API: independent controls, state identities and context isolation passed; baseline %s (%.3fs)\n', ...
-    report.baseline.status,report.seconds);
+fprintf('CR STEP API: independent controls, state identities and context isolation passed; baseline %s; failure regression %s (%.3fs)\n', ...
+    report.baseline.status,report.failureRegression.status,report.seconds);
+end
+
+function [r,problem]=failure_regression(options)
+timer=tic;problem=[];
+r=struct('requested',true,'performed',false,'status','requested','passed',false, ...
+    'scope','Real secant-zero fixture, frozen checkpoint spatial matrices and frozen initial RHS, candidate time kernel only; not a new active-only-D7 spatial trajectory.', ...
+    'failureStateFile',char(options.failureStateFile),'failureStateSHA256',char(options.failureStateSHA256), ...
+    'geometryCheckpointFile',char(options.geometryCheckpointFile), ...
+    'geometryCheckpointSHA256',char(options.geometryCheckpointSHA256), ...
+    'targetTau',12.5,'expectedFittedKnot',263,'completedSteps',0,'actualTau',NaN, ...
+    'stepInformation',struct([]),'inputsUnchanged',false);
+try
+    assert(isfile(r.failureStateFile)&&isfile(r.geometryCheckpointFile), ...
+        'ipm_cr:StepApiFailureFixture','An explicitly requested real-failure input is missing.');
+    beforeFailure=ipm_cr.io.sha(r.failureStateFile);beforeGeometry=ipm_cr.io.sha(r.geometryCheckpointFile);
+    assert(strcmp(beforeFailure,r.failureStateSHA256)&&strcmp(beforeGeometry,r.geometryCheckpointSHA256), ...
+        'ipm_cr:StepApiFailureFixture','An explicitly bound real-failure input SHA differs.');
+    failed=load(r.failureStateFile,'lastAcceptedInMemory');
+    geometry=load(r.geometryCheckpointFile,'checkpoint');
+    assert(isfield(failed,'lastAcceptedInMemory')&&isfield(geometry,'checkpoint'), ...
+        'ipm_cr:StepApiFailureFixture','Expected lastAcceptedInMemory and checkpoint MAT variables.');
+    initial=failed.lastAcceptedInMemory;cp=geometry.checkpoint;
+    r.initialContextKeysMatch=isequaln(initial.ctxKey,cp.state.ctxKey);
+    assert(r.initialContextKeysMatch,'ipm_cr:StepApiFailureFixture', ...
+        'The in-memory state and geometry checkpoint must have identical frozen context keys.');
+    assert(initial.scale.canonicalTime==12.479430743775856&&initial.step==3218, ...
+        'ipm_cr:StepApiFailureFixture','Expected the actual tau12.479430743775856 step3218 failure state.');
+    r.initialTau=initial.scale.canonicalTime;r.initialStep=initial.step;r.actualTau=r.initialTau;
+    r.initialScale=initial.scale;r.frozenMethod=cp.explicitOptions;r.frozenSource=cp.sourceInventory;
+    % Deliberately use the saved geometry matrices, not current mesh.build:
+    % this isolates the time fix from the later spatial derivative change.
+    ctx=ipm_cr.context(cp.geometry,cp.wallOps,cp.explicitOptions);
+    r.candidateContextIdentity=ctx.identity;s=initial;s.ctxId=ctx.id;s.ctxKey=ctx.key;
+    exact(rmfield(s,{'ctxId','ctxKey'}),rmfield(initial,{'ctxId','ctxKey'}),'failureFrozenInitialStateAndRhs');
+    r.initialFrozenRhsPreserved=true;r.initialRefreshPerformed=false;r.performed=true;
+    savedOptions=ctx.opts;savedKey=ctx.key;
+    previous=s;[s,info]=ipm_cr.step(s,ctx,r.targetTau);
+    r.firstInformation=info;r.firstScale=s.scale;r.completedSteps=1;r.actualTau=s.scale.canonicalTime;
+    r.stepInformation=info;
+    failure_step_checks(previous,s,ctx,info,savedOptions,savedKey);
+    assert(info.timePartition.fitted&&info.timePartition.knotIndex==r.expectedFittedKnot, ...
+        'ipm_cr:StepApiFailureKnot','The real failure fixture must fit original spline knot263.');
+    while s.scale.canonicalTime<r.targetTau
+        assert(r.completedSteps<16,'ipm_cr:StepApiFailureSteps', ...
+            'The bounded real-failure regression exceeded sixteen completed short steps.');
+        previous=s;[s,info]=ipm_cr.step(s,ctx,r.targetTau);
+        r.completedSteps=r.completedSteps+1;r.actualTau=s.scale.canonicalTime;
+        r.stepInformation(end+1)=info;
+        failure_step_checks(previous,s,ctx,info,savedOptions,savedKey);
+    end
+    r.finalScale=s.scale;r.finalStep=s.step;r.maximumStageCfl=max([r.stepInformation.realizedMaximumStageCfl]);
+    r.finalFieldInfinity=struct('F',max([abs(s.rhs.F.core(:));abs(s.rhs.F.polar(:))]), ...
+        'Q',max([abs(s.rhs.Q.core(:));abs(s.rhs.Q.polar(:))]));
+    r.failureStateSHA256After=ipm_cr.io.sha(r.failureStateFile);
+    r.geometryCheckpointSHA256After=ipm_cr.io.sha(r.geometryCheckpointFile);
+    r.inputsUnchanged=strcmp(beforeFailure,r.failureStateSHA256After)&&strcmp(beforeGeometry,r.geometryCheckpointSHA256After);
+    assert(s.scale.canonicalTime==r.targetTau&&r.inputsUnchanged, ...
+        'ipm_cr:StepApiFailureIdentity','The real-failure endpoint or bound inputs changed.');
+    r.status='passed_real_secant_zero_frozen_space';r.passed=true;
+catch failure
+    r.status='failed_requested';r.errorIdentifier=failure.identifier;
+    r.errorMessage=getReport(failure,'extended','hyperlinks','off');problem=failure;
+end
+r.seconds=toc(timer);
+end
+
+function failure_step_checks(previous,s,ctx,info,savedOptions,savedKey)
+assert(isfinite(info.dt)&&info.dt>0&&info.dt<=info.initialProposedDt&& ...
+    s.scale.canonicalTime>previous.scale.canonicalTime&&s.step==previous.step+1&& ...
+    strcmp(info.timeIntegrator,'rk4')&&info.cflStepFormulaApplied&& ...
+    isequal(info.stageCfl,info.dt*info.stageRates)&& ...
+    all(isfinite(info.stageRates))&&isfinite(info.realizedMaximumStageCfl)&& ...
+    info.realizedMaximumStageCfl<=.3,'ipm_cr:StepApiFailureFiniteStep');
+for patch={'core','polar'}
+    key=patch{1};
+    assert(all(isfinite(s.rhs.F.(key)),'all')&&all(isfinite(s.rhs.Q.(key)),'all'), ...
+        'ipm_cr:StepApiFailureFiniteFields','Complete F and Q must remain finite.');
+end
+exact(fieldnames(s.scale),fieldnames(previous.scale),'failureScaleApi');
+names=fieldnames(s.scale);
+for k=1:numel(names)
+    value=s.scale.(names{k});
+    if isnumeric(value),assert(all(isfinite(value),'all'),'ipm_cr:StepApiFailureFiniteScale');end
+end
+assert(info.physicalClockUpdate.wordCount==4&& ...
+    isequal(clock_words(previous.scale),info.physicalClockUpdate.beforeWords)&& ...
+    isequal(clock_words(s.scale),info.physicalClockUpdate.afterWords), ...
+    'ipm_cr:StepApiFailureClockWords','Every physical-clock word must follow the public step API.');
+exact(ctx.opts,savedOptions,'failureContextOptions');exact(ctx.key,savedKey,'failureContextKey');
+assert(strcmp(s.ctxId,ctx.id)&&isequaln(s.ctxKey,ctx.key)&& ...
+    isequaln(s.originalAuthority,previous.originalAuthority), ...
+    'ipm_cr:StepApiFailureOutputIdentity');
+end
+
+function words=clock_words(scale)
+tail=zeros(1,2);if isfield(scale,'physicalTimeTail'),tail=reshape(scale.physicalTimeTail,1,[]);end
+words=[scale.physicalTime,scale.physicalTimeLow,tail];
 end
 
 function out=snapshot(s)
