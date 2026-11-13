@@ -32,7 +32,7 @@ c.run.tauEnd = 200;
 
 选定的中网格算例通过 `examples/selected_medium.json` 设置 `interfaceAllocation=[-3,-2,.96,.60,.66,2]`。分配方案把中网格作为粗网格在同一物理区间上的二倍细化，减少笛卡尔张量尾部的列，并调整环带内缘的径向间距。初始核心数组为 `129×229`，环带为 `537×181`，重网格时环带行数可变。
 
-该算例以紧支撑 Gaussian 源初始化，在初始物理坐标 `r≤10` 保留原源，`10<r<15` 光滑过渡，`r≥15` 取零。`method.transport.upwindMultiplier=1.25` 缩放五阶线性迎风通量的耗散项，CFL 估计采用同一系数。
+该算例以紧支撑 Gaussian 源初始化。以初始物理坐标 `m=max(|x_1|,|x_2|)` 计，`m≤10` 时保留原 `rho_x`，`10<m<15` 时光滑过渡，`m≥15` 时为零。`method.transport.upwindMultiplier=1.25` 缩放五阶线性迎风通量的耗散项，CFL 估计采用同一系数。
 
 ## Case 与初值
 
