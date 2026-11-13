@@ -90,6 +90,7 @@ else
     if wantDiagnostics
         dF=ipm_cr.mesh.diff(F,g);
         Q=struct('core',dF.core.x,'polar',dF.polar.x);
+        if isfield(g.core,'stair'),Q=ipm_cr.mesh.fill(Q,g);end
     end
 end
 F.core(1,g.core.originIndex)=0;

@@ -13,6 +13,10 @@ validateattributes(nu,{'numeric'},{'scalar','real','finite','nonnegative'});
 sigma=nu*min(c.dx,c.dy);
 reconstruction='linear5';
 if isfield(tr,'reconstruction'),reconstruction=char(tr.reconstruction);end
+upwind=1;if isfield(tr,'upwindMultiplier'),upwind=tr.upwindMultiplier;end
+validateattributes(upwind,{'numeric'},{'scalar','real','finite','>=',1});
+assert(upwind==1||strcmp(reconstruction,'linear5'), ...
+    'ipm_cr:StudyUpwind','The upwind multiplier is defined for linear5.');
 rateMultiplier=1;
 if strcmp(reconstruction,'central4')
     damping=.2;if isfield(tr,'centralDissipation'),damping=tr.centralDissipation;end
@@ -113,16 +117,16 @@ prepared=@apply;
             alphaR=hypot(vr',sigma);alphaTheta=hypot(angularVelocity,sa);
             alphaY(:,1)=0;alphaTheta(:,[1,end])=0;
         end
-        B=struct('core',advection(ux,coreX,alphaX)+advection(uy',coreY,alphaY)', ...
-            'polar',advection(vr',radial,alphaR)'./radialMetric+ ...
-                advection(angularVelocity,polarTheta,alphaTheta));
+        B=struct('core',advection(ux,coreX,alphaX,upwind)+advection(uy',coreY,alphaY,upwind)', ...
+            'polar',advection(vr',radial,alphaR,upwind)'./radialMetric+ ...
+                advection(angularVelocity,polarTheta,alphaTheta,upwind));
         if request.partials
             % Exact speed derivatives of the frozen reconstruction. For
             % smooth LF, D_eff=.5*(Dp+Dm+(v/alpha)*(Dp-Dm)); the legacy
             % zero-floor path retains its selected upwind derivative.
-            dx=selected(ux,coreX,alphaX);dy=selected(uy',coreY,alphaY)';
-            dr=selected(vr',radial,alphaR)'./radialMetric;
-            da=selected(angularVelocity,polarTheta,alphaTheta);
+            dx=selected(ux,coreX,alphaX,upwind);dy=selected(uy',coreY,alphaY,upwind)';
+            dr=selected(vr',radial,alphaR,upwind)'./radialMetric;
+            da=selected(angularVelocity,polarTheta,alphaTheta,upwind);
             partials=struct('c_l',struct('core',-c.X.*dx-c.Y.*dy, ...
                 'polar',-p.r(:).*dr), ...
                 'delta',struct('core',-dx, ...
@@ -139,8 +143,8 @@ prepared=@apply;
                 pr=abs(vr)./radialSpacing;pa=abs(angularVelocity)/angularSpacing;
             end
             pa(:,[1,end])=0;
-            cx=rateMultiplier*cx;cy=rateMultiplier*cy;
-            pr=rateMultiplier*pr;pa=rateMultiplier*pa;
+            cx=(rateMultiplier*upwind)*cx;cy=(rateMultiplier*upwind)*cy;
+            pr=(rateMultiplier*upwind)*pr;pa=(rateMultiplier*upwind)*pa;
             coreRate=cx+cy;polarRate=pr+pa;
             coreRate(~c.active)=-Inf;polarRate(~p.active)=-Inf;
             [maximumCore,ic]=max(coreRate(:));
@@ -173,6 +177,7 @@ prepared=@apply;
             position.reactionIncluded=false;
             position.smoothPhysicalSpeedFloor=sigma;
             position.reconstruction=reconstruction;
+            position.upwindMultiplier=upwind;
             position.centeredDampingCflMultiplier=rateMultiplier;
             position.outerDegreeSwitching=~highOrderOuter;
             position.outerBoundary=outer;
@@ -248,22 +253,23 @@ pair.plus=ipm_cr.op.weno5(field,unit,1,spacing,opts);
 pair.minus=-ipm_cr.op.weno5(field,-unit,1,spacing,opts);
 end
 
-function result=advection(velocity,pair,alpha)
-if isempty(alpha)
+function result=advection(velocity,pair,alpha,upwind)
+if isempty(alpha)&&upwind==1
     result=-(max(velocity,0).*pair.plus+min(velocity,0).*pair.minus);
 else
+    if isempty(alpha),alpha=abs(velocity);end
     result=-.5*(velocity.*(pair.plus+pair.minus)+ ...
-        alpha.*(pair.plus-pair.minus));
+        (upwind*alpha).*(pair.plus-pair.minus));
 end
 end
 
-function result=selected(velocity,pair,alpha)
-if isempty(alpha)
+function result=selected(velocity,pair,alpha,upwind)
+if isempty(alpha)&&upwind==1
     result=pair.minus;positive=velocity>=0;result(positive)=pair.plus(positive);
 else
     ratio=zeros(size(velocity));
     nonzero=alpha>0;ratio(nonzero)=velocity(nonzero)./alpha(nonzero);
-    result=.5*((pair.plus+pair.minus)+ratio.*(pair.plus-pair.minus));
+    result=.5*((pair.plus+pair.minus)+(upwind*ratio).*(pair.plus-pair.minus));
 end
 end
 

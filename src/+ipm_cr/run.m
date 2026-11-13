@@ -16,6 +16,7 @@ logCleanup=onCleanup(@()fclose(logfid)); %#ok<NASGU>
 threads=maxNumCompThreads(1);threadCleanup=onCleanup(@()maxNumCompThreads(threads)); %#ok<NASGU>
 timer=tic;state=[];ctx=[];g=[];wallOps=[];method=[];pointer=[];priorWall=0;
 auditHistory=struct([]);remeshHistory=struct([]);
+earlyPeak=[];latePeak=[];
 historyColumns=ipm_cr.io.history('columns');history=zeros(0,numel(historyColumns));
 manifest=struct([]);authority=struct();
 summary=struct('kind','ipm_cr_run_v2','status','initializing', ...
@@ -117,6 +118,12 @@ try
             if isempty(remeshHistory),remeshHistory=entry;else,remeshHistory(end+1)=entry;end %#ok<AGROW>
             logline('REMESH step=%d tau=%.12g status=%s reason=%s', ...
                 state.step,state.scale.canonicalTime,meshInfo.status,meshInfo.reason);
+        end
+        tau=state.scale.canonicalTime;
+        if tau>=34&&tau<=44
+            earlyPeak=ipm_cr.io.studyTau40(folder,'tau40',trial,g,state,ctx.mesh,meshInfo,earlyPeak);
+        elseif tau>=60&&tau<=76
+            latePeak=ipm_cr.io.studyTau40(folder,'tau60to76',trial,g,state,ctx.mesh,meshInfo,latePeak);
         end
         g=ctx.mesh;method=ctx.opts;
         history(end+1,:)=ipm_cr.io.history('row',state,info,priorWall+toc(timer)); %#ok<AGROW>

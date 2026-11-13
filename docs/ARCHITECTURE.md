@@ -21,7 +21,7 @@ run → io.checkpoint / history → pack
 | `+poisson/+fem` | 弱式、缓存求解、trace 连接和解析 Green 富集 |
 | `+model / +gauge / rhs` | 背景、物理源、原 I/P/C、直接规范求解与完整 RHS |
 | `+op / +time` | 中心对流、耗散、初始率区间、样条 knot 时间网格、同阶段场/尺度/时钟 |
-| `remesh` | 周期源 profile、固定参考再分布与活动主态转移 |
+| `remesh` | 形态触发、核心与环带重建、活动主态转移 |
 | `+io / +diag / pack` | 身份、事务存储、被动诊断和原生数据 |
 
 谱与 FD 后端、独立 GLL 布局和旧 namespace 保留为显式参考，不参与默认主链或继承当前资格。
@@ -47,7 +47,7 @@ v = ipm_cr.sample(s,ctx,X,Y);
 | `s.rhs` | 同态 q、速度、规范率、F/Q 及诊断 |
 | `s.scale` | 尺度、平移、密度原点、规范时间与完整物理时钟 |
 | `s.originalAuthority / referencePeak` | 固定初始参考，不随网格重设 |
-| `s.remesh` | 上次周期时刻、次数和固定 `referenceCore` |
+| `s.remesh` | 初始形态/网格处方、上次实际 remesh 参考和下次检查时间 |
 | `s.import` | 显式 seed 来源、SHA、真实 τ 和转移比较 |
 
 `F=W_τ`、`Q=q_τ`。解析背景路径先微分 η 并加回解析背景导数；对完整 W/F 再差分一般不同于定义的 q/Q，该表示差可记录为诊断。物理密度为 `exp(-logC_omega)*(densityOrigin+W)`。
@@ -56,19 +56,21 @@ v = ipm_cr.sample(s,ctx,X,Y);
 
 ## 3. 共同主要节点与连接
 
-`medium` 从 `data/mesh.json` 读取实际轴，`coarse` 每轴精确取 `1:2:end`，度量步长相应倍增。核心数组行 Y/列 X 为 `129×241 / 65×121`，环带行 r/列 θ 为 `549×193 / 275×97`，外半径 `1e10`。
+`mesh.build` 从 `data/mesh.json` 读取非均匀轴和度量。核心配额区由原正逻辑轴前 35% 映射到物理矩形。默认两轴的配额系数为 `sqrt(.5)*[2,1]`，相对上一版横向核心配额翻倍，纵向沿用原分布。每轴总区间数固定。通过光滑累积分布反解逻辑坐标，并按导数更新度量。核心数组行 Y、列 X；粗网格从中网格两条轴隔点取样，细网格加密过渡区。粗、中、细角向分别为 91、181、361 点。粗网格角轴精确取中网格角轴的 `1:2:end`，保留两端，环带外半径 `1e10`。
 
 要求是 Poisson 与对流主要内部节点完全相同；边界低维例外须单独说明。当前实现全部原生节点共用：`x/y/r/theta`、`X/Y` 和 shape 逐位一致，无额外全局 GLL 未知量。Gauss 点仅作单元内积分。
 
-`mesh.build` 支持 preset、显式生成器或完整 `axes={x,y,r,theta,dxMetric,dyMetric,drMetric}`。实际轴重建微分、度量、活动区、donor、交换、采样和 geometry key。三层 ghost 的活动边界按实际节点确定。
+`mesh.build` 支持 preset、显式生成器或完整 `axes={x,y,r,theta,dxMetric,dyMetric,drMetric}`。阶梯构造器先定位环带的第二个活动环，再按该环所穿笛卡尔单元内角半径的中位数裁出完整活动单元。阶梯取整使各角的实际活动层数不同，逐角记录到 `geometryKey.staircase.activeRadialLayers`。原三层 ghost 仍供输运和插值使用，计量活动重叠时另算。历史矩形构造仍支持原来的显式几何。
 
 物理微分 `mesh.diff` 的活动行只读取同一 patch 的活动节点：内部保留原中心七点模板，人工接口附近采用同一物理坐标上的七点单侧/偏心闭合。core 的墙法向、polar 的两条物理墙和外圆闭合保持原模板。五阶迎风仍使用同步 ghost，活动重叠值不投影。这个选择避免把两片不同的 RHS 截断误差通过 ghost 交换后再作横跨接口的差分；它真实改变了离散源 `q=D_A eta+H_X`，Poisson 与 `Q=D_A eta_tau+H_Xtau` 使用同一个 `D_A`，不是单独更改残差显示。geometry key 记录 `physicalDerivativeClosure=same_patch_active_D7_v1`，旧轨道不继承为同方法资格。光滑场的局部多项式一致性、单侧权重放大、完整反馈及稳定性须分别测试。
 
-两片活动副本独立演化。`mesh.fill` 同时由旧活动 donor 填 ghost，不投影活动重叠区；`mesh.sample` 以活动 core 为唯一 owner，执行局部七点采样，其边缘 stencil 可以读到同步 ghost。remesh 转移另行只读活动 donor；采样 owner 相同不表示每个重构 donor 都活动。局部参考值加差分的算式保留常数消去；MEX 与分块 MATLAB 实现使用同一公式，缓存只含几何与查询。
+两片活动副本独立演化。`mesh.fill` 同时由旧活动 donor 填 ghost。`mesh.sample` 在活动阶梯内使用核心，边缘七点模板可以读到同步 ghost。环带 ghost、remesh 转移和独立重叠审计使用完整的活动七乘七笛卡尔模板。局部参考值加差分的算式保留常数消去；MEX 与分块 MATLAB 实现使用同一公式，缓存只含几何与查询。
 
 ## 4. FEM 与外域
 
 默认 native C0 Lagrange 元，`degree=5`、`quadOrder=8`、`stride=[]`。几何动态规划分组控制局部插值条件，少量六次元吸收余数，最外完整径向元为六次；不依赖源或测得误差选组，也不增加节点。非空 native `stride` 仅兼容 `stride=degree`。
+
+核心 FEM 保留覆盖活动节点及其输运模板的完整原生矩形单元。由此形成独立的阶梯迹，FEM 迹与活动阶梯之间的支撑层属于同一坐标轴。FEM 在保留单元上装配，外部核心 ghost 的速度来自环带重构。
 
 核心在物理 x/y、环带在 `t=log(r),theta` 装配弱式。原生 raw `psi` 直接取节点系数；速度来自同一 FE 场的解析单元导数。Gauss 源求积和跨 patch trace 仍需传递。固定几何缓存稀疏 Cholesky 因子和小 Schur 系统；每次 patch 线性解固定作一次原弱残差修正，不按误差挑选迭代次数。构建的角向特征系统、trace、填充与 remesh 重建成本须独立量测。
 
@@ -100,15 +102,15 @@ I/P/C 保持原墙离散定义。gauge 对 `(c_l,delta)` 用精确速度 Jacobia
 
 ## 6. 核心形态累积变化触发 remesh
 
-配置为 `enabled / level / threshold / checkEveryTau / minCheckEveryTau / monitorStrength / blend / maxNodeMotion / candidateAxes`，默认见 [USAGE](USAGE.md#形态触发-remesh)。取全活动正 q 峰值25%超水平集中的主峰连墙分量，按横向最大绝对范围和纵向最大范围计量；相对最后实际 remesh 后参考的任一方向累积变化达到20%才插值。首次仅校准，检查间隔仅控制观测时机，不重置累积参考或强制换网格；按旧形态变化率与阈值余量在 `.005… .5τ` 间调度，保存lastShape及下一检查时刻。几何触发与测试专用的精度验收门严格区分。
+对 25% 和 80% 正 q 超水平集，在同一活动点三角剖分上分别找主峰连墙分量。每层触发量 `triggerExtents` 包括横向最大绝对范围，以及穿过主峰的壁法向线上从墙到上方第一个等值线交点的高度。与最后一次实际换网格后保存的两层锚点比较，任一层任一方向相对变化达到 25% 时换网格。首次检查建立锚点，后续普通检查只更新观测时刻。两层四项变化率和阈值余量决定下次观测间隔 `.005… .5τ`。配置见 [USAGE](USAGE.md#形态触发-remesh)。
 
-每次由当前源 profile 更新固定参考核心上的目标密度，作一次有界凸移动，保持点数、patch 外框、原点和环带轴。固定 `referenceCore` 避免反复乘密度。有 η 时转移 η，否则转移 W，再重建 mesh/context 并计算一次完整 RHS。
+触发后用较外层的完整轮廓范围 `extents` 定网格外框，默认采用 25% 层。阶梯路径以当前与初始范围之比分别缩放初始笛卡尔轴和度量，按相同分辨率档重建全径向轴，复用初始时的接口对齐规则。角轴和外半径固定。`remesh('geometry',G0,EXTENTS0,EXTENTS)` 可重建指定形态的几何，供独立检查和绘图。
 
-固定完整轴端点和节点数的再分布保留各片独立表示：在本片实际活动轴上用最近七点张量多项式重构，新暴露的边界条带继续本片端部多项式，不从另一片替换活动值，不读旧 ghost，也不投影活动重叠。`localMap`/`tensorMap` 的端部延拓须显式启用，默认仍禁止外推。改变 patch 框或节点数的导入使用覆盖路由，属于另一种表示转移。
+有 η 时转移 η，否则转移 W。每个目标活动点优先从原同片活动节点做七点张量插值，超出覆盖则使用另一片。两个 patch 的活动重叠副本分别转移，ghost 按新交换计划填充。新 context 复用原墙和方法选项，计算一次完整 RHS。
 
 随后直接继续，没有候选精度验收、反向转移、W/q/F/Q、速度、IPC、重叠门或回滚。原参考、尺度、四字时钟和步号由复制与数据流保留，在独立测试中验证。构造或算式本身无法计算时由运行器记录错误，不切换替代路径。
 
-七点多项式次数不是完整 remesh 精度证明。独立 `test_remesh_order` 用三层非零解析 η，在同一新网格/context 上比较转移态与直接解析构造态的完整 W/q/F/Q；舍入受限的误差对不赋阶。当前通过仅限该平滑、被分辨的同 τ 试验；未分辨窄层与长期轨道仍需分别解释。
+七点多项式次数不是完整 remesh 精度证明。独立 `test_remesh_order` 用三层非零解析 η，在同一新网格/context 上比较转移态与直接解析构造态的完整 W/q/F/Q；舍入受限的误差对不赋阶。该测试的固定外框转移证据与变外框 remesh 的轨道误差分别记录。
 
 ## 7. 复现与存储
 

@@ -5,6 +5,9 @@ function q=source(model,scale,X,Y)
 assert(isequal(size(X),size(Y))&&isreal(X)&&isreal(Y)&& ...
     all(isfinite(X),'all')&&all(isfinite(Y),'all'), ...
     'ipm_cr:BackgroundQueries','Use matching finite real queries.');
+if strcmp(model.kind,'compact_gaussian_source')
+    q=ipm_cr.model.compactBackground(model,scale,X,Y,false,true);return
+end
 if isfield(model,'tailCorrection')&&model.tailCorrection
     gaussianModel=model;gaussianModel.tailCorrection=false;
     q=ipm_cr.model.source(gaussianModel,scale,X,Y);

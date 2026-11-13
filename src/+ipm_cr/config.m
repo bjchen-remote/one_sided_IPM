@@ -28,10 +28,15 @@ else
     cfg.background=struct('kind','gaussian_primitive','amplitude',p.gaussianAmplitude, ...
         'centerX',p.gaussianCenterX,'widthX',p.gaussianWidthX,'widthY',p.gaussianWidthY, ...
         'skewWeight',p.gaussianSkewWeight,'tailCorrection',true);
+    if isfield(p,'gaussianSourceCutoff')
+        cfg.background.kind='compact_gaussian_source';
+        cfg.background.cutoff=p.gaussianSourceCutoff;
+        cfg.background.tailCorrection=false;
+    end
 end
 transport=cfg.transport;transport.reconstruction='linear5';transport.smoothSpeedCoefficient=.1;
-transport.centralDissipation=.2;
-opts=struct('geometry',struct('preset','medium'),'solverOptions',struct('coreDegree',[48,48], ...
+transport.centralDissipation=.2;transport.upwindMultiplier=1;
+opts=struct('geometry',default_geometry(),'solverOptions',struct('coreDegree',[48,48], ...
     'angularDegree',64,'polarDegree',16,'rOuter',1e10), ...
     'transport',transport,'cfl',.3,'maxDt',.2, ...
     'timeIntegrator','rk4','background',cfg.background,'initial',cfg.manifestFile, ...
@@ -74,8 +79,12 @@ end
 
 function c=case_defaults()
 c=struct('format','ipm_cr_case_v1','initial','data/initial.json', ...
-    'domain',struct('rmax',1e10),'method',struct('geometry',struct('preset','medium')),'run',run_defaults(), ...
+    'domain',struct('rmax',1e10),'method',struct('geometry',default_geometry()),'run',run_defaults(), ...
     'stop',stop_defaults(),'save',struct('data',true,'history',true,'label',''));
+end
+
+function g=default_geometry()
+g=struct('preset','medium','staircase',true);
 end
 
 function r=run_defaults()
@@ -104,7 +113,7 @@ if isCase
     radius=1e10;
     if isfield(input,'domain'),allowed(input.domain,{'rmax'});radius=input.domain.rmax;end
     validateattributes(radius,{'numeric'},{'scalar','real','finite','positive'});
-    if ~isfield(requested,'geometry'),requested.geometry=struct('preset','medium');end
+    if ~isfield(requested,'geometry'),requested.geometry=default_geometry();end
     if ~isfield(requested.geometry,'grid'),requested.geometry.grid=struct();end
     if ~isfield(requested,'solverOptions'),requested.solverOptions=struct();end
     if isfield(requested.geometry.grid,'rmax')

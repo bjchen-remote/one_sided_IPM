@@ -23,8 +23,8 @@ rho0=[];                         % original registered Gaussian datum
 % rho0=@(x,y) (1+tanh(x)).*exp(-y.^2); % optional vectorized alternative
 % Set rho0=[] to use c.initial unchanged.
 
-% Actual nonuniform medium axes; coarse is their exact every-other subset.
-c.method.geometry=struct('preset','medium'); % 'coarse' halves each axis
+% Nonuniform thin staircase. Use 'coarse', 'medium', or 'fine'.
+c.method.geometry.preset='medium';
 c.method.poissonBackend='fem';
 c.method.remesh=struct('enabled',true);
 c.method.timeIntegrator='rk4';

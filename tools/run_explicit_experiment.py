@@ -120,7 +120,7 @@ def prepare(folder, args):
     atomic(folder / 'mission.json', dict(
         kind='ipm_cr_frozen_run_v2', status='prepared', targetTau=args.target,
         createdUtc=now(), deadlineUtc=deadline.isoformat(), segmentSeconds=args.segment_seconds,
-        threads=1, rssLimitBytes=2 * 1024**3, minimumFreeDiskBytes=8 * 1024**3,
+        threads=1, rssLimitBytes=4 * 1024**3, minimumFreeDiskBytes=8 * 1024**3,
         matlab=args.matlab, sourceFrozen=True,
         caseFormat=bool(args.case), initial=initial, seedInput=seed,
         timeIntegrator=method.get('timeIntegrator', 'rk4'),

@@ -9,7 +9,8 @@ if nargin<1,options=struct();end
 assert(isstruct(options)&&isscalar(options),'ipm_cr:ExplicitGeometry', ...
     'Geometry options must be a scalar structure.');
 allowed={'grid','coreHalfWidth','coreHeight','coreSpacing','polarStart', ...
-    'ghostWidth','interpolationWidth','radialRedistribution','coreMap','preset','axes'};
+    'ghostWidth','interpolationWidth','radialRedistribution','coreMap','preset','axes', ...
+    'staircase','coreAllocation','staircaseFine','interfaceAllocation'};
 assert(all(ismember(fieldnames(options),allowed)),'ipm_cr:ExplicitGeometry', ...
     'An unknown explicit transport geometry option was supplied.');
 timer=tic;
@@ -17,8 +18,20 @@ explicit=isfield(options,'axes')||isfield(options,'preset');
 halo=option(options,'ghostWidth',3);width=option(options,'interpolationWidth',7);
 validateattributes(halo,{'numeric'},{'scalar','integer','>=',3});
 validateattributes(width,{'numeric'},{'scalar','integer','>=',3});
+staircase=option(options,'staircase',false);
+fine=option(options,'staircaseFine',isfield(options,'preset')&&strcmp(options.preset,'fine'));
+validateattributes(staircase,{'logical'},{'scalar'});
+validateattributes(fine,{'logical'},{'scalar'});
+assert((~staircase||explicit)&&(staircase||~fine),'ipm_cr:StaircaseAxes', ...
+    'Use a nonuniform preset or explicit axes for the staircase.');
 if explicit
-    [axes,axisSource]=explicit_axes(options);
+    [axes,axisSource]=explicit_axes(options,staircase);
+    if isfield(options,'interfaceAllocation')
+        assert(staircase&&~fine,'ipm_cr:StudyGeometry','This allocation study uses the thin staircase.');
+        [moved,axisSource.interfaceAllocation]=ipm_cr.mesh.studyAllocation( ...
+            axes,options.interfaceAllocation,halo);
+        [axes,~]=explicit_axes(struct('axes',moved),true);
+    end
     x=axes.x;y=axes.y;intervalX=numel(x)-1;intervalY=numel(y)-1;
     a=x(end);height=y(end);mapped=true;
     grid=struct('nr',numel(axes.r),'ntheta',numel(axes.theta), ...
@@ -89,6 +102,30 @@ end
 
 if explicit
     r=axes.r;theta=axes.theta;drMetric=axes.drMetric;
+    if staircase
+        cap=min(x(ix(end)),y(iy(end)));
+        if fine,[r,drMetric]=ipm_cr.mesh.stairAxes('radial',r,drMetric,cap);end
+        % Keep the second active ring inside the rectangular donor bounds.
+        first=find(r<=cap,1,'last')-halo-1;
+        assert(isscalar(first)&&first>=1,'ipm_cr:StaircaseRadius', ...
+            'The supplied annular axis must reach inside the Cartesian donor bounds.');
+        r=r(first:end);drMetric=drMetric(first:end);
+        second=r(halo+2);
+        xp=x(core.originIndex:end).';angle=theta(:);
+        if numel(theta)==91
+            % Keep the reference rays used to measure the staircase cut.
+            angle=linspace(0,pi,181).';
+        end
+        i=discretize(min(xp(end),second*abs(cos(angle))),xp);
+        j=discretize(min(y(end),second*sin(angle)),y);
+        % A complete Cartesian cell is retained when its inward corner
+        % lies inside the cut. Use the median corner radius on ring two
+        % so the staircase rounding costs about two active rows per ray.
+        cover=max(r(halo+1),median(hypot(xp(i),y(j))))+16*eps(max(1,second));
+        core=ipm_cr.mesh.staircase('build',core,cover,halo,width);
+        active=core.active;
+        axisSource.staircaseFine=fine;
+    end
     co=cos(theta);si=sin(theta);co([1,end])=[1,-1];si([1,end])=0;
     if mod(numel(theta),2)==1
         middle=(numel(theta)+1)/2;co(middle)=0;si(middle)=1;
@@ -147,12 +184,18 @@ coreQueryR=hypot(cx,cy);coreQueryTheta=atan2(cy,cx);
 assert(min(coreQueryR)>=r(halo+1)&&max(coreQueryR)<=r(end), ...
     'ipm_cr:ExplicitOverlap','Every Cartesian ghost must lie in the active annulus.');
 pr=polar.X(polar.ghostIndices);py=polar.Y(polar.ghostIndices);
-assert(all(pr>=x(ix(1))&pr<=x(ix(end)))&& ...
-    all(py>=y(iy(1))&py<=y(iy(end))), ...
-    'ipm_cr:ExplicitOverlap','Every annular inward ghost must lie in the active Cartesian rectangle.');
 coreFromPolar=ipm_cr.mesh.tensorMap(r(polar.activeRows),theta, ...
     coreQueryR,coreQueryTheta,width);
-polarFromCore=ipm_cr.mesh.tensorMap(y(iy),x(ix),py,pr,width);
+if staircase
+    polarFromCore=ipm_cr.mesh.staircase('donors',core,pr,py,width);
+    hi=ipm_cr.mesh.staircase('ray',core.stair,theta);
+    core.stair.activeRadialLayers=sum(r(polar.activeRows)<=hi.',1);
+else
+    assert(all(pr>=x(ix(1))&pr<=x(ix(end)))&& ...
+        all(py>=y(iy(1))&py<=y(iy(end))), ...
+        'ipm_cr:ExplicitOverlap','Every annular inward ghost must lie in the active Cartesian rectangle.');
+    polarFromCore=ipm_cr.mesh.tensorMap(y(iy),x(ix),py,pr,width);
+end
 if redistribute
     % Preserve the physical donors and weights, not sparse column strides:
     % the latter change when the complete annular radial dimension changes.
@@ -192,6 +235,13 @@ if mapped
     g.geometryKey.logicalSpacing=[core.dxi,core.deta];
     g.geometryKey.mapParameters=core.mapParameters;
 end
+if staircase
+    g.kind='native_tensor_staircase_polar_v1';
+    g.geometryKey.kind=g.kind;
+    g.geometryKey.staircase=struct('active',core.active,'elements',core.stair.elements, ...
+        'cover',cover,'activeRadialLayers',core.stair.activeRadialLayers,'fineRadial',fine);
+    g.geometryKey.physicalDerivativeClosure='staircase_active_line_D7';
+end
 if redistribute
     redistributionInfo.annularFirstFullIndex=first;
     redistributionInfo.retainedNr=nr;
@@ -199,6 +249,9 @@ if redistribute
     g.radialRedistribution=redistributionInfo;
 end
 if explicit,g.axisSource=axisSource;end
+if explicit&&isfield(axisSource,'interfaceAllocation')
+    g.geometryKey.interfaceAllocation=axisSource.interfaceAllocation.measure;
+end
 end
 
 function D=active_derivative(axis,active)
@@ -211,7 +264,7 @@ D(active,:)=0;
 D(active,active)=ipm_cr.mesh.fd(axis(active),1,7);
 end
 
-function [a,source]=explicit_axes(o)
+function [a,source]=explicit_axes(o,staircase)
 % One physical-axis boundary for portable presets and remesh candidates.
 assert(~(isfield(o,'axes')&&isfield(o,'preset')),'ipm_cr:ExplicitAxes', ...
     'Use either preset or axes, not both.');
@@ -220,20 +273,32 @@ assert(~any(isfield(o,{'coreHalfWidth','coreHeight','coreSpacing','polarStart', 
     'Physical axes cannot be combined with coordinate-generator options.');
 names={'x','y','r','theta','dxMetric','dyMetric','drMetric'};
 if isfield(o,'preset')
-    name=char(validatestring(o.preset,{'medium','coarse'}));
+    name=char(validatestring(o.preset,{'medium','coarse','fine'}));
     data=jsondecode(fileread(fullfile(ipm_cr.root(),'data','mesh.json')));
     assert(strcmp(data.format,'ipm_cr_physical_axes_v1'),'ipm_cr:MeshPreset', ...
         'Unsupported portable mesh data format.');
-    a=data.axes;stride=1+strcmp(name,'coarse');
+    a=data.axes;stride=1+strcmp(name,'coarse');angularStride=stride;
+    if staircase
+        allocation=option(o,'coreAllocation',sqrt(.5)*[2,1]);
+        [a,allocationInfo]=ipm_cr.mesh.stairAxes('core',a,allocation,strcmp(name,'fine'));
+        nt=180*(1+strcmp(name,'fine'));
+        a.theta=linspace(0,pi,nt+1);
+    end
     for k=1:4
-        key=names{k};assert(mod(numel(a.(key))-1,stride)==0,'ipm_cr:MeshPreset', ...
+        step=stride;if k==4,step=angularStride;end
+        key=names{k};assert(mod(numel(a.(key))-1,step)==0,'ipm_cr:MeshPreset', ...
             'Exact halving requires even interval counts in every direction.');
-        a.(key)=a.(key)(1:stride:end);
+        a.(key)=a.(key)(1:step:end);
     end
     for k=5:7,key=names{k};a.(key)=stride*a.(key)(1:stride:end);end
     source=struct('kind','portable_preset','preset',name, ...
         'stride',stride,'sourceGeometrySHA256',data.sourceGeometrySHA256, ...
         'coordinatesAreExactSubsequence',true);
+    if staircase
+        source.coreAllocation=allocationInfo;
+        source.coordinatesAreExactSubsequence=false;
+        source.cartesianSubsetOfStaircaseMedium=strcmp(name,'coarse');
+    end
 else
     a=o.axes;
     source=struct('kind','explicit_axes','coordinatesAreExactSubsequence',false);

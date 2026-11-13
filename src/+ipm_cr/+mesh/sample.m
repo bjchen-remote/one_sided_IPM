@@ -1,7 +1,7 @@
 function [values,map]=sample(fields,g,x,y)
 %INTERPOLATE Local degree-six values with one active-core ownership rule.
 % FIELDS.core is y-by-x; FIELDS.polar is r-by-theta, without a polar origin.
-% Inside the active Cartesian rectangle use Cartesian data; elsewhere use
+% Inside the active Cartesian cells use Cartesian data; elsewhere use
 % the annulus. Full arrays, including synchronized halos, supply stencils.
 % Optional MAP contains geometry-only sparse core/polar maps for reuse:
 % values=ipm_cr.mesh.sample(fields,map) uses the identical anchored apply.
@@ -19,10 +19,13 @@ assert(isstruct(fields)&&isscalar(fields)&&all(isfield(fields,{'core','polar'}))
 assert(isnumeric(x)&&isreal(x)&&isnumeric(y)&&isreal(y)&&isequal(size(x),size(y)), ...
     'ipm_cr:ExplicitInterpolationQueries','Use matching real query arrays.');
 assert(all(isfield(c,{'activeRows','activeColumns'})), ...
-    'ipm_cr:ExplicitInterpolationGrid','The geometry must identify the active Cartesian rectangle.');
+    'ipm_cr:ExplicitInterpolationGrid','The geometry must identify the active Cartesian cells.');
 columns=c.activeColumns;rows=c.activeRows;
 bounds=[xAxis(columns(1)),xAxis(columns(end)),yAxis(rows(1)),yAxis(rows(end))];
 key=struct('x',xAxis,'y',yAxis,'r',r,'theta',theta,'bounds',bounds);
+if isfield(c,'stair')
+    key.stair=struct('edges',c.stair.edges,'top',c.stair.top);
+end
 persistent retained
 hit=[];
 for k=1:numel(retained)
@@ -81,6 +84,9 @@ radius=hypot(x,y);finite=isfinite(x)&isfinite(y)&y>=0;
 withinDisk=radius<=key.r(end)*(1+16*eps);
 coreOwner=finite&withinDisk&x>=key.bounds(1)&x<=key.bounds(2)& ...
     y>=key.bounds(3)&y<=key.bounds(4);
+if isfield(key,'stair')
+    coreOwner=finite&withinDisk&ipm_cr.mesh.staircase('contains',key.stair,x,y);
+end
 polarOwner=finite&withinDisk&~coreOwner&radius>=key.r(1)*(1-16*eps);
 core=spalloc(n,numel(key.x)*numel(key.y),nnz(coreOwner)*width^2);
 polar=spalloc(n,numel(key.r)*numel(key.theta),nnz(polarOwner)*width^2);

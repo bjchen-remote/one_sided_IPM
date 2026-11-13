@@ -7,7 +7,9 @@ function b=background(model,scale,X,Y,wantSecondDerivatives)
 if nargin<5,wantSecondDerivatives=true;end
 tailEnabled=isfield(model,'tailCorrection')&&model.tailCorrection;
 shared=[];
-if tailEnabled
+if strcmp(model.kind,'compact_gaussian_source')
+    b=ipm_cr.model.compactBackground(model,scale,X,Y,wantSecondDerivatives,false);
+elseif tailEnabled
     [b,shared]=ipm_cr.model.gaussian(model,scale,X,Y,wantSecondDerivatives);
 else
     b=ipm_cr.model.gaussian(model,scale,X,Y,wantSecondDerivatives);

@@ -17,21 +17,23 @@ assert(isstruct(state)&&isscalar(state)&&all(isfield(state,{'W','rhs'}))&& ...
     'ipm_cr:ExplicitAuditState','Supply one complete accepted explicit state and its geometry.');
 opts=resolve_options(options);
 c=g.core;p=g.polar;cr=c.activeRows;cc=c.activeColumns;
+staircase=isfield(c,'stair');
 pr=p.activeRows;pc=p.activeColumns;
 cx=c.x(cc);cy=c.y(cr);rr=p.r(pr);tt=p.theta(pc);
-assert(all(c.active(cr,cc),'all')&&all(p.active(pr,pc),'all')&& ...
+assert((staircase||all(c.active(cr,cc),'all'))&&all(p.active(pr,pc),'all')&& ...
     min([numel(cx),numel(cy),numel(rr),numel(tt)])>=7, ...
     'ipm_cr:ExplicitAuditDonors','Both independent active donor tensors must fit seven-point stencils.');
 key=struct('coreX',cx(:),'coreY',cy(:),'polarR',rr(:), ...
     'polarTheta',tt(:),'radialSamples',opts.radialSamples, ...
     'angularSamples',opts.angularSamples,'includeWall',opts.includeWall);
+if staircase,key.stair=struct('edges',c.stair.edges,'top',c.stair.top,'active',c.active);end
 persistent retained
 hit=[];
 for j=1:numel(retained)
     if isequaln(retained{j}.key,key),hit=j;break;end
 end
 if isempty(hit)
-    cache=prepare_maps(key);
+    cache=prepare_maps(key,c);
     if isempty(retained),retained={cache};else,retained{end+1}=cache;end
     if numel(retained)>2,retained=retained(end-1:end);end
     cacheReused=false;
@@ -67,7 +69,7 @@ info=struct('kind','independent_active_overlap_local7_checkpoint_audit_v1', ...
     'wallQueryCount',nnz(cache.wall),'queryBounds',cache.bounds, ...
     'activeDonorBounds',cache.donorBounds,'interpolationWidth',7, ...
     'queryPattern','fractionally offset log-radius rays plus independent wall radii', ...
-    'stencilPolicy','seven available ACTIVE nodes; one-sided near active-axis boundaries', ...
+    'stencilPolicy','seven available ACTIVE nodes; one-sided near active boundaries', ...
     'oneSidedQueryCounts',cache.oneSidedCounts, ...
     'uniqueOwnerInterpolationUsed',false,'ghostValuesRead',false, ...
     'geometryQueryMapCacheReused',cacheReused,'fieldsCached',false, ...
@@ -98,6 +100,7 @@ end
             isnumeric(field.polar)&&isreal(field.polar)&&isequal(size(field.polar),size(p.X)), ...
             'ipm_cr:ExplicitAuditFields','Every compared field must use both native patch array shapes.');
         a=field.core(cr,cc);b=field.polar(pr,pc);
+        if staircase,a=field.core(c.activeIndices);end
         assert(all(isfinite(a),'all')&&all(isfinite(b),'all'), ...
             'ipm_cr:ExplicitAuditFields','Active audit donor values must be finite.');
         av=cache.coreMap*a(:);bv=cache.polarMap*b(:);
@@ -132,28 +135,34 @@ validateattributes(opts.includeWall,{'logical'},{'scalar'});
 validateattributes(opts.includeQueryCoordinates,{'logical'},{'scalar'});
 end
 
-function cache=prepare_maps(key)
+function cache=prepare_maps(key,core)
 cx=key.coreX;cy=key.coreY;rr=key.polarR;tt=key.polarTheta;
 assert(all(isfinite([cx;cy;rr;tt]))&&all(diff(cx)>0)&&all(diff(cy)>0)&& ...
     all(diff(rr)>0)&&all(diff(tt)>0)&&cx(1)<0&&cx(end)>0&&cy(1)==0&& ...
     rr(1)>0&&tt(1)==0&&abs(tt(end)-pi)<=16*eps(pi), ...
     'ipm_cr:ExplicitAuditGeometry','Use active Cartesian and origin-free half-annular donor axes.');
 theta=pi*((0:key.angularSamples-1)'+.371)/key.angularSamples;
+staircase=isfield(key,'stair');
+if staircase,stairHi=ipm_cr.mesh.staircase('ray',key.stair,[theta;0;pi]);end
 x=[];y=[];r=[];angle=[];wall=false(0,1);
 fraction=((0:key.radialSamples-1)'+.413)/key.radialSamples;
 for j=1:numel(theta)
     a=theta(j);co=cos(a);si=sin(a);
     if co>0,upperX=cx(end)/co;elseif co<0,upperX=cx(1)/co;else,upperX=Inf;end
     upper=min([rr(end),upperX,cy(end)/si]);lower=rr(1);
+    if staircase,upper=min(upper,stairHi(j));end
     if upper<=lower*(1+128*eps),continue;end
     rq=exp(log(lower)+fraction*log(upper/lower));
     x=[x;rq*co];y=[y;rq*si];r=[r;rq];angle=[angle;a*ones(size(rq))]; %#ok<AGROW>
     wall=[wall;false(size(rq))]; %#ok<AGROW>
 end
 if key.includeWall
-    for a=[0,pi]
+    for j=1:2
+        a=(j-1)*pi;
         if a==0,upper=min(rr(end),cx(end));else,upper=min(rr(end),-cx(1));end
-        lower=rr(1);if upper<=lower*(1+128*eps),continue;end
+        lower=rr(1);
+        if staircase,upper=min(upper,stairHi(key.angularSamples+j));end
+        if upper<=lower*(1+128*eps),continue;end
         rq=exp(log(lower)+fraction*log(upper/lower));
         x=[x;rq*cos(a)];y=[y;zeros(size(rq))];r=[r;rq]; %#ok<AGROW>
         angle=[angle;a*ones(size(rq))];wall=[wall;true(size(rq))]; %#ok<AGROW>
@@ -162,11 +171,25 @@ end
 assert(~isempty(x)&&all(x>=cx(1)&x<=cx(end)&y>=cy(1)&y<=cy(end))&& ...
     all(r>=rr(1)&r<=rr(end)&angle>=tt(1)&angle<=tt(end)), ...
     'ipm_cr:ExplicitAuditOverlap','The two independent active tensors need a nonempty common query domain.');
-coreMap=ipm_cr.mesh.tensorMap(cy,cx,y,x,7);
+if staircase
+    coreMap=ipm_cr.mesh.staircase('donors',core,x,y,7);
+else
+    coreMap=ipm_cr.mesh.tensorMap(cy,cx,y,x,7);
+end
 polarMap=ipm_cr.mesh.tensorMap(rr,tt,r,angle,7);
 oneSidedCounts=struct('coreX',one_sided_count(cx,x), ...
     'coreY',one_sided_count(cy,y),'polarR',one_sided_count(rr,r), ...
     'polarTheta',one_sided_count(tt,angle));
+if staircase
+    [iq,donor]=find(coreMap);nodes=core.activeIndices(donor);
+    [j,i]=ind2sub(size(core.active),nodes);
+    [~,cxNearest]=min(abs(x-core.x),[],2);
+    [~,cyNearest]=min(abs(y-core.y.'),[],2);
+    % An active staircase shifts some stencils away from their centered
+    % line even when the query is away from the bounding rectangle edges.
+    oneSidedCounts.coreX=numel(unique(iq(abs(i-cxNearest(iq))>3)));
+    oneSidedCounts.coreY=numel(unique(iq(abs(j-cyNearest(iq))>3)));
+end
 cache=struct('key',key,'coreMap',coreMap,'polarMap',polarMap, ...
     'x',x,'y',y,'r',r,'theta',angle,'wall',wall, ...
     'bounds',struct('x',[min(x),max(x)],'y',[min(y),max(y)], ...

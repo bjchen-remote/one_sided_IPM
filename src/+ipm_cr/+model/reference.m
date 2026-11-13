@@ -43,13 +43,16 @@ assert(numel(x)>=7&&numel(y)>=7&&all(isfinite(x))&&all(diff(x)>0)&& ...
     all(isfinite(y))&&all(diff(y)>0)&&y(1)==0, ...
     'polar:T0OriginalAxes','Original axes must be finite and increasing from the wall.');
 [X,Y]=meshgrid(x,y);
+cutoff=intersect(fieldnames(p),{'gaussianCutoff','gaussianSourceCutoff'});
+compact=~isempty(cutoff);
 if sampled
     assert(isnumeric(f.rho)&&isreal(f.rho)&&isequal(size(f.rho),size(X))&& ...
         all(isfinite(f.rho),'all'),'polar:T0FrameDensity', ...
         'The sampled original density must be a finite real y-by-x array on its measurement axes.');
     analytic=f.rho;
 else
-    analytic=ipm_cr.model.initial(struct('X',X,'Y',Y,'ny',size(X,1),'nx',size(X,2)),p);
+    datum=p;if compact,datum=rmfield(p,cutoff);end
+    analytic=ipm_cr.model.initial(struct('X',X,'Y',Y),datum);
     assert(isequal(size(f.rho),size(analytic))&&all(isfinite(f.rho),'all'), ...
         'polar:T0FrameDensity','The original density has an incompatible shape.');
     assert(max(abs(analytic-f.rho),[],'all')<=256*eps(max(1,max(abs(f.rho),[],'all'))), ...
@@ -59,6 +62,9 @@ Dx=ipm_cr.mesh.fd(x,1,7);q=analytic(1,:)*Dx';
 if isfield(f,'w')
     assert(max(abs(q-f.w(1,:)))<=256*eps(max(1,max(abs(q)))), ...
         'polar:T0DerivativeProvenance','Rebuilt original wall Dx differs from the t0 source.');
+end
+if compact
+    q=ipm_cr.model.initial(struct('X',x,'Y',zeros(size(x))),p)*Dx';
 end
 settings=cfg.scaling;
 runtime={'pinIndex','pinX','originIndex','strainTarget','trackedPeakAnchor', ...
@@ -88,7 +94,7 @@ scale=struct('logC_l',0,'logC_omega',0,'physicalTime',0,'physicalTimeLow',0, ...
 refs=struct('I0',integral.value,'P0',peak.value,'C0',centroid.value, ...
     'peakX0',peak.x,'wallIntegralRadius',settings.wallIntegralRadius);
 guess=[0,0];
-if all(isfield(f,{'transport_u1','u1'}))
+if ~compact&&all(isfield(f,{'transport_u1','u1'}))
     difference=f.transport_u1(1,:)-f.u1(1,:);
     guess(1)=(difference(end)-difference(1))/(x(end)-x(1));
     guess(2)=difference(settings.originIndex);

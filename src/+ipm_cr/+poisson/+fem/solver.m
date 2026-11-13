@@ -46,7 +46,16 @@ classdef solver < handle
             c.ix=2:c.nx-1;c.iy=2:c.ny-1;
             free=false(c.ny,c.nx);free(c.iy,c.ix)=true;c.free=find(free);
             trace=false(c.ny,c.nx);trace(:,[1,end])=true;trace(end,:)=true;trace(1,:)=false;
-            c.traceIndex=find(trace);c.A=kron(c.xAxis.M,c.yAxis.K)+kron(c.xAxis.K,c.yAxis.M);
+            if isfield(g.core,'stair')
+                assert(native&&sparseDirect&&cfg.degree==g.core.stair.degree, ...
+                    'ipm_cr:FEMStairBasis','The staircase uses sparse direct P5/P6 native elements.');
+                c=ipm_cr.poisson.fem.stair_core(c,g.core);
+                outside=~g.core.stair.support;
+                c.outsideSupport=find(outside);
+                c.outsideReturn=g.exchange.coreFromPolar(outside(g.core.ghostIndices),:);
+            else
+                c.traceIndex=find(trace);c.A=kron(c.xAxis.M,c.yAxis.K)+kron(c.xAxis.K,c.yAxis.M);
+            end
             if sparseDirect
                 c.factor=cholesky_factor(c.A(c.free,c.free));
             else
@@ -110,7 +119,10 @@ classdef solver < handle
             obj.coupling=struct('RCA',mapCA.E,'RAC',mapAC.E,'S',S, ...
                 'factor',decomposition(S,'lu'),'condition',cond(S));
             if ~sparseDirect,obj.coupling.coreResponse=response;end
-            if native
+            if isfield(c,'stairReturns')
+                obj.returns=struct('core',c.stairReturns, ...
+                    'polar',native_plan(p.tAxis,p.thetaAxis,g.polar,'polar'));
+            elseif native
                 obj.returns=struct('core',native_plan(c.xAxis,c.yAxis,g.core,'core'), ...
                     'polar',native_plan(p.tAxis,p.thetaAxis,g.polar,'polar'));
             else
@@ -150,6 +162,7 @@ classdef solver < handle
                 assert(isa(analyticSource,'function_handle'),'ipm_cr:FEMSource');
                 qc=qc+sample(analyticSource,c.qX,c.qY);qp=qp+sample(analyticSource,p.qX,p.qY);
             end
+            if isfield(c,'stairQuadrature'),qc(~c.stairQuadrature)=0;end
             Fc=c.yAxis.Bq'*(c.yAxis.qw.*qc.*c.xAxis.qw')*c.xAxis.Bq;
             Fp=p.tAxis.Bq'*(p.tAxis.qw.*(p.qR.^2.*qp).*p.thetaAxis.qw')*p.thetaAxis.Bq;
             if strcmp(obj.config.outerBoundary,'forced_dtn'),Fp(end,:)=Fp(end,:)+bd.load.';end
@@ -183,6 +196,12 @@ classdef solver < handle
                 'coefficients',struct('core',cc,'polar',pa), ...
                 'representation',sprintf('C0 %s tensor Galerkin streamfunction; actual element degrees %d-%d; analytical element derivatives', ...
                     obj.config.nodalLayout,obj.elementSummary.range));
+            if isfield(c,'stairReturns')
+                for field={'psi','u1','u2'}
+                    k=field{1};ids=obj.g.polar.activeIndices;
+                    flow.core.(k)(c.outsideSupport)=c.outsideReturn*flow.polar.(k)(ids);
+                end
+            end
             returnSeconds=toc(phase);[oc,op]=obj.overlap(flow);
             obj.Counters.solves=obj.Counters.solves+1;obj.Counters.factorReuses=obj.Counters.factorReuses+1;
             info=struct('solverCompleted',true,'accuracyAssessed',false, ...
@@ -338,6 +357,7 @@ theta=[1e-5,((1:25)+.17)*pi/26.5,pi-1e-5];co=cos(theta);si=sin(theta);
 xbound=g.core.activeXBounds(2)*ones(size(theta));
 xbound(co<0)=-g.core.activeXBounds(1);
 hi=min(xbound./abs(co),g.core.activeYBounds(2)./si);lo=g.polar.innerActiveRadius;
+if isfield(g.core,'stair'),hi=ipm_cr.mesh.staircase('ray',g.core.stair,theta).';end
 keep=hi>lo+128*eps(max([1,lo,max(hi)]));
 kept=theta(keep);r=lo+[.2;.5;.8]*(hi(keep)-lo);th=repmat(kept,3,1);
 x=r.*cos(th);y=r.*sin(th);
@@ -462,7 +482,9 @@ for j=1:numel(r),i=r(j);counts(i)=counts(i)+1;columns(i,counts(i))=c(j);values(i
 end
 function v=evaluate_plan(plan,U)
 if isfield(plan,'native')&&plan.native
-    if strcmp(plan.chart,'core')
+    if isfield(plan,'stair')
+        u1=reshape(-(plan.Db*U(:)),size(U));u2=reshape(plan.Da*U(:),size(U));
+    elseif strcmp(plan.chart,'core')
         u1=-(plan.Db*U);u2=U*plan.Da';
     else
         dt=plan.Da*U;da=U*plan.Db';

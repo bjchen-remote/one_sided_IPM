@@ -6,7 +6,8 @@
   },
   "method": {
     "geometry": {
-      "preset": "medium"
+      "preset": "medium",
+      "staircase": true
     },
     "timeIntegrator": "rk4",
     "cfl": 0.3,

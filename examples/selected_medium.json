@@ -1,0 +1,49 @@
+{
+  "format": "ipm_cr_case_v1",
+  "initial": "data/initial_small_source.json",
+  "domain": {
+    "rmax": 10000000000.0
+  },
+  "method": {
+    "geometry": {
+      "preset": "medium",
+      "staircase": true,
+      "coreAllocation": [
+        1.4142135623730951,
+        0.7071067811865476
+      ],
+      "interfaceAllocation": [
+        -3,
+        -2,
+        0.96,
+        0.6,
+        0.66,
+        2
+      ]
+    },
+    "timeIntegrator": "rk4",
+    "cfl": 0.4,
+    "maxDt": 0.2,
+    "poissonBackend": "fem",
+    "transport": {
+      "upwindMultiplier": 1.25
+    }
+  },
+  "run": {
+    "outputDir": "result/selected_medium",
+    "tauEnd": 400,
+    "wallSeconds": 43200,
+    "checkpointEveryTau": 1,
+    "checkpointWallSeconds": 180,
+    "logEveryTau": 1,
+    "resume": true
+  },
+  "stop": {
+    "physicalTime": []
+  },
+  "save": {
+    "data": true,
+    "history": true,
+    "label": "Selected medium, linear5 upwind multiplier 1.25"
+  }
+}
