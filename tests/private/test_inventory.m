@@ -6,6 +6,6 @@ self=[mfilename('fullpath'),'.m'];paths=[reshape(paths,1,[]),{self}];
 paths=unique(paths,'stable');inventory=struct('path',{},'bytes',{},'sha256',{});
 for k=1:numel(paths)
     path=char(paths{k});assert(~isempty(path)&&isfile(path),'ipm_cr:TestSource','Missing test dependency %s.',path);
-    item=dir(path);inventory(end+1)=struct('path',path,'bytes',item.bytes,'sha256',ipm_cr.io.sha(path)); %#ok<AGROW>
+    item=dir(path);inventory(end+1)=struct('path',path,'bytes',item.bytes,'sha256',ipm_cr.io.identity('sha',path)); %#ok<AGROW>
 end
 end

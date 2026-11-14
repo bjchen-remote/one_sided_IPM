@@ -11,8 +11,7 @@ if isfield(s,'eta')
     model=options.background;scale=s.scale;
     background=struct('eta',s.eta,'scale',scale, ...
         'core',ipm_cr.model.background(model,scale,g.core.X,g.core.Y,wantDiagnostics), ...
-        'polar',ipm_cr.model.background(model,scale,g.polar.X,g.polar.Y,wantDiagnostics), ...
-        'source',@(X,Y)ipm_cr.model.source(model,scale,X,Y));
+        'polar',ipm_cr.model.background(model,scale,g.polar.X,g.polar.Y,wantDiagnostics));
     W=[];
 else
     W=s.W;
@@ -20,30 +19,30 @@ end
 validateattributes(wantDiagnostics,{'logical'},{'scalar'});
 split=~isempty(background);
 if split
-    [eta,sync]=ipm_cr.mesh.fill(background.eta,g);
+    [eta,sync]=ipm_cr.mesh.exchange(background.eta,g);
     W=struct('core',eta.core+background.core.H,'polar',eta.polar+background.polar.H);
     differentiated=eta;
 else
-    [W,sync]=ipm_cr.mesh.fill(W,g);differentiated=W;
+    [W,sync]=ipm_cr.mesh.exchange(W,g);differentiated=W;
 end
-d=ipm_cr.mesh.diff(differentiated,g);
-qNative=ipm_cr.mesh.fill(struct('core',d.core.x,'polar',d.polar.x),g);
+d=ipm_cr.space.basis.gradient(differentiated,g,ctx.spline);
+qNative=ipm_cr.mesh.exchange(struct('core',d.core.x,'polar',d.polar.x),g);
 if split
     q=struct('core',qNative.core+background.core.x,'polar',qNative.polar+background.polar.x);
-    [physical,pinfo]=ctx.velocity(qNative,background.source,wantDiagnostics);
+    [physical,pinfo]=ctx.velocity(q,wantDiagnostics);
     forcing=struct('core',-physical.core.u1.*background.core.x-physical.core.u2.*background.core.y, ...
         'polar',-physical.polar.u1.*background.polar.x-physical.polar.u2.*background.polar.y);
 else
-    q=qNative;[physical,pinfo]=ctx.velocity(q,[],wantDiagnostics);
+    q=qNative;[physical,pinfo]=ctx.velocity(q,wantDiagnostics);
 end
 % The synthetic two-ray carrier represents exactly the ORIGINAL wall
 % sample points. It is only an adapter for the unchanged I/P/C routines.
 r=ctx.wallR;map=ctx.wallMap;
-R=ipm_cr.mesh.sample(W,map);
+R=ipm_cr.mesh.interpolate.sample(W,map);
 R(1,:)=0;
-[m,observeRate]=ipm_cr.gauge.wall(R,r,wallOps,struct('interpolation','linear'));
-Uref=ipm_cr.mesh.sample(struct('core',physical.core.u1,'polar',physical.polar.u1),g,m.C,0);
-prepare=ipm_cr.op.prepare(differentiated,g,struct('transport',options.transport));
+[m,observeRate]=ipm_cr.gauge.observe.wall(R,r,wallOps,struct('interpolation','linear'));
+Uref=ipm_cr.mesh.interpolate.sample(struct('core',physical.core.u1,'polar',physical.polar.u1),g,m.C,0);
+prepare=ipm_cr.space.transport(differentiated,g,ctx.spline);
 [rates,ginfo]=ipm_cr.gauge.rates(R,r,wallOps,@base,Uref,guess,m,observeRate);
 [B,rate,position,~,residualTransport,F0]=transport(rates.c_l,rates.delta);
 if split
@@ -56,12 +55,12 @@ if split
         'polar',residualTransport.polar+rates.c_omega*eta.polar-T0);
     residualRhs=struct('core',residualBase.core-background.core.timeH, ...
         'polar',residualBase.polar-background.polar.timeH);
-    residualRhs=ipm_cr.mesh.fill(residualRhs,g);
+    residualRhs=ipm_cr.mesh.exchange(residualRhs,g);
     residualRhs.core(1,g.core.originIndex)=0;
     F=struct();Q=[];assemblyDifference=struct();
     if wantDiagnostics
-        dF=ipm_cr.mesh.diff(residualRhs,g);
-        dq=ipm_cr.mesh.fill(struct('core',dF.core.x,'polar',dF.polar.x),g);
+        dF=ipm_cr.space.basis.gradient(residualRhs,g,ctx.spline);
+        dq=ipm_cr.mesh.exchange(struct('core',dF.core.x,'polar',dF.polar.x),g);
         Q=struct();
     end
     for patch={'core','polar'}
@@ -85,19 +84,20 @@ if split
 else
     F=struct('core',B.core+rates.c_omega*W.core-F0, ...
         'polar',B.polar+rates.c_omega*W.polar-F0);
-    F=ipm_cr.mesh.fill(F,g);
+    F=ipm_cr.mesh.exchange(F,g);
     Q=[];
     if wantDiagnostics
-        dF=ipm_cr.mesh.diff(F,g);
+        dF=ipm_cr.space.basis.gradient(F,g,ctx.spline);
         Q=struct('core',dF.core.x,'polar',dF.polar.x);
+        if isfield(g.core,'stair'),Q=ipm_cr.mesh.exchange(Q,g);end
     end
 end
 F.core(1,g.core.originIndex)=0;
-wallF=ipm_cr.mesh.sample(F,map);
+wallF=ipm_cr.mesh.interpolate.sample(F,map);
 wallF(1,:)=0;
 if wantDiagnostics
     % Accepted endpoints rebuild the density observables independently.
-    complete=ipm_cr.gauge.wall(R,r,wallOps, ...
+    complete=ipm_cr.gauge.observe.wall(R,r,wallOps, ...
         struct('interpolation','linear','rateField',wallF));
 else
     % The density is immutable within this RHS. Its original I/P/C
@@ -124,7 +124,7 @@ if split
     if wantDiagnostics
         % q=D_h eta+H_X, so q_tau and D_h(W_tau) need not agree exactly.
         % This is a discrete representation defect, not continuum error.
-        dComplete=ipm_cr.mesh.diff(F,g);defect=struct();
+        dComplete=ipm_cr.space.basis.gradient(F,g,ctx.spline);defect=struct();
         for patch={'core','polar'}
             key=patch{1};active=g.(key).active;
             delta=Q.(key)(active)-dComplete.(key).x(active);
@@ -142,14 +142,14 @@ end
     function [wall,partials]=base(cl,delta)
         if nargout>1,[b,~,~,partials]=transport(cl,delta);
         else,b=transport(cl,delta);end
-        if ~split,b=ipm_cr.mesh.fill(b,g);end
-        wall=ipm_cr.mesh.sample(b,map);
+        if ~split,b=ipm_cr.mesh.exchange(b,g);end
+        wall=ipm_cr.mesh.interpolate.sample(b,map);
         wall(1,:)=wall(1,1);
         if nargout>1
             for field={'c_l','delta'}
                 key=field{1};v=partials.(key);
-                if ~split,v=ipm_cr.mesh.fill(v,g);end
-                partials.(key)=ipm_cr.mesh.sample(v,map);
+                if ~split,v=ipm_cr.mesh.exchange(v,g);end
+                partials.(key)=ipm_cr.mesh.interpolate.sample(v,map);
                 partials.(key)(1,:)=partials.(key)(1,1);
             end
         end
@@ -165,7 +165,7 @@ end
         originTransport=b.core(1,g.core.originIndex);
         if split
             originTransport=originTransport-vx.core(1,g.core.originIndex)*background.core.originX;
-            T=ipm_cr.mesh.fill(struct('core',b.core+forcing.core, ...
+            T=ipm_cr.mesh.exchange(struct('core',b.core+forcing.core, ...
                 'polar',b.polar+forcing.polar),g);
             cr=delta-Uref;
             for patch={'core','polar'}
@@ -174,7 +174,7 @@ end
             end
             if nargout==4
                 for field={'c_l','delta'}
-                    key=field{1};v=ipm_cr.mesh.fill(partials.(key),g);
+                    key=field{1};v=ipm_cr.mesh.exchange(partials.(key),g);
                     for patch={'core','polar'}
                         name=patch{1};p=g.(name);bg=background.(name);
                         if strcmp(key,'c_l'),v.(name)=v.(name)-p.X.*bg.x-p.Y.*bg.y;

@@ -17,7 +17,7 @@ assert(isempty(regexpi(name,'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$','once')), ..
 assert(isstruct(overrides)&&isscalar(overrides),'ipm_cr:InitialParameters', ...
     'Use a scalar Gaussian parameter structure, without eta arrays or callbacks.');
 root=fileparts(fileparts(mfilename('fullpath')));addpath(fullfile(root,'src'));
-base=ipm_cr.problem();p=base.physics;
+base=ipm_cr.model.initial.problem();p=base.physics;
 short={'amplitude','centerX','widthX','widthY','skewWeight'};
 full={'gaussianAmplitude','gaussianCenterX','gaussianWidthX','gaussianWidthY','gaussianSkewWeight'};
 assert(all(ismember(fieldnames(overrides),[short,full])), ...
@@ -45,8 +45,8 @@ stage=tempname(cases);[ok,message]=mkdir(stage);assert(ok,'ipm_cr:InitialWrite',
 cleanup=onCleanup(@()remove_stage(stage)); %#ok<NASGU>
 loaded=load(base.authorityFile,'frame');old=loaded.frame;
 [X,Y]=meshgrid(old.x,old.y);
-rho=ipm_cr.model.initial(struct('X',X,'Y',Y,'ny',size(X,1),'nx',size(X,2)),p);
-Dx=ipm_cr.mesh.fd(old.x,1,7);
+rho=ipm_cr.model.initial.density(struct('X',X,'Y',Y,'ny',size(X,1),'nx',size(X,2)),p);
+Dx=ipm_cr.mesh.interpolate.metricDerivative(old.x,1,7);
 frame=struct('x',old.x,'y',old.y,'rho',rho,'w',rho*Dx', ...
     'step',0,'tau',0,'t',0,'Cx',1,'Cy',1,'Comega',1,'Xshift',0); %#ok<NASGU>
 matFile=fullfile(stage,'t0.mat');save(matFile,'frame','-v7.3');
@@ -57,7 +57,7 @@ for field={'referenceWallIntegral','referenceWallGradientCentroid','referenceWal
     if isfield(manifest.scaling,field{1}),manifest.scaling=rmfield(manifest.scaling,field{1});end
 end
 candidate=base;candidate.physics=p;candidate.scaling=manifest.scaling;
-candidate.authorityFile=matFile;candidate.authoritySha=ipm_cr.io.sha(matFile);
+candidate.authorityFile=matFile;candidate.authoritySha=ipm_cr.io.identity('sha',matFile);
 [wall,scale,refs,guess]=ipm_cr.model.reference(candidate);
 assert(all(isfinite([refs.I0,refs.P0,refs.C0,guess]))&&refs.I0>0&&refs.P0>0, ...
     'ipm_cr:InitialGauge','The fixed measurement axes must resolve positive, finite I/P/C gauges.');
@@ -70,15 +70,15 @@ assert(isequaln(wall,verifiedWall)&&isequaln(scale,verifiedScale)&& ...
     'ipm_cr:InitialReference','Persisted reference verification changed the Gaussian authority.');
 initial=['data/cases/',name,'/initial.json'];
 manifest.file=['data/cases/',name,'/t0.mat'];manifest.sha256=candidate.authoritySha;
-ipm_cr.io.json(fullfile(stage,'initial.json'),manifest);
-assert(strcmp(ipm_cr.io.sha(base.authorityFile),base.authoritySha)&& ...
-    strcmp(ipm_cr.io.sha(fullfile(root,base.manifestFile)),base.manifestSha), ...
+ipm_cr.io.identity('json',fullfile(stage,'initial.json'),manifest);
+assert(strcmp(ipm_cr.io.identity('sha',base.authorityFile),base.authoritySha)&& ...
+    strcmp(ipm_cr.io.identity('sha',fullfile(root,base.manifestFile)),base.manifestSha), ...
     'ipm_cr:InitialBaseChanged','The fixed measurement authority changed during generation.');
 assert(~isfolder(target)&&~isfile(target),'ipm_cr:InitialExists','Case appeared during generation.');
 % No REPLACE_EXISTING option: a concurrent case creator cannot be overwritten.
 java.nio.file.Files.move(java.io.File(stage).toPath(),java.io.File(target).toPath(), ...
     javaArray('java.nio.file.CopyOption',0));
-cfg=ipm_cr.problem(initial);[~,~,finalRefs]=ipm_cr.model.reference(cfg);
+cfg=ipm_cr.model.initial.problem(initial);[~,~,finalRefs]=ipm_cr.model.reference(cfg);
 assert(isequaln(finalRefs,refs),'ipm_cr:InitialReference','Published reference differs from staged verification.');
 report=struct('kind','generated_Gaussian_t0_authority_v1','initial',initial, ...
     'authority',ipm_cr.io.identity('authority',root,initial),'physics',p,'references',refs, ...

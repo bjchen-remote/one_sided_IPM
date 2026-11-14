@@ -1,5 +1,8 @@
 # 张量核心—极坐标外域的连接方法
 
+> 历史方法与结果。使用对应的冻结版本复现。当前 B 样条实现见 [架构](ARCHITECTURE.md)。
+
+
 连接的验收对象是 **密度表示 → 物理求导 → Poisson → 速度返回 → 显式输运 → 原始 I/P/C 规范** 的完整链。高阶插值、重叠一致性与线性残差各自只覆盖一部分，不能独立认证轨道精度。
 
 当前数值默认是 **RK4、带物理时间解析尾项的背景/η 拆分、`linear5`、`smoothSpeedCoefficient=.1`、Poisson 次数 `48/64/16`**，仍在资格测试阶段。新默认要求先运行 [`build_ipm_cr_native`](../tools/build_ipm_cr_native.m)；内核缺失或不兼容时明确报错。`legacy_weno5`、`smooth_weno5` 和 `ν=0` 均是需显式记录的可选配置。公开 `init/step/rhs/refresh/sample/run` 入口见 [README](../README.md)，实现细节见 [ARCHITECTURE](ARCHITECTURE.md)。下文报告启用可选远区重分配后的 τ10 有限采样自收敛，不将它等同于连续全域四阶保证或完成 200τ。

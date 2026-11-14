@@ -1,29 +1,23 @@
 {
   "format": "ipm_cr_case_v1",
-  "initial": "data/initial.json",
+  "initial": "data/initial_small_source.json",
   "domain": {
     "rmax": 10000000000
   },
   "method": {
     "geometry": {
-      "preset": "medium"
+      "preset": "coarse",
+      "staircase": true
     },
-    "timeIntegrator": "rk4",
-    "cfl": 0.3,
-    "maxDt": 0.2,
-    "poissonBackend": "fem"
+    "cfl": 0.4
   },
   "run": {
-    "outputDir": "result/medium_example",
-    "tauEnd": 5,
-    "wallSeconds": 600
-  },
-  "stop": {
-    "physicalTime": []
+    "outputDir": "result_coarse",
+    "tauEnd": 100
   },
   "save": {
     "data": true,
     "history": true,
-    "label": "example_medium_tau5"
+    "label": "Coarse nonuniform B-spline"
   }
 }

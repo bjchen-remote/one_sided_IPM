@@ -6,27 +6,18 @@ function report=plot_ipm_cr_mesh(outputDir,checkpointFolder)
 root=fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(root,'src'));
 stylePath=fullfile(fileparts(mfilename('fullpath')),'private','mesh_style.m');
-styleIdentity=struct('path',stylePath,'sha256',ipm_cr.io.sha(stylePath));
+styleIdentity=struct('path',stylePath,'sha256',ipm_cr.io.identity('sha',stylePath));
 if nargin<1||isempty(outputDir)
     outputDir=fullfile(root,'test','results','mesh_views_tau200');
 end
 if nargin<2||isempty(checkpointFolder)
-    checkpointFolder=fullfile(root,'test','results','explicit_tau200_20261021_v1','native');
+    checkpointFolder=fullfile(root,'result');
 end
 assert(~isfile(fullfile(outputDir,'plots.json')),'ipm_cr:PlotPreserve','Use a fresh output directory.');
 if ~isfolder(outputDir),mkdir(outputDir);end
-% Historical v1 is imported explicitly and only for read-only plotting.
-% Current v2 uses a portable slot basename validated by the checkpoint API.
-header=jsondecode(fileread(fullfile(checkpointFolder,'latest.json')));
-if isfield(header,'kind')&&strcmp(header.kind,'ipm_cr_explicit_accepted_pointer_v1')
-    mode='import';
-else
-    mode='load';
-end
-[cp,pointer]=ipm_cr.io.checkpoint(mode,checkpointFolder);
-if strcmp(mode,'import'),checkpointPath=pointer.path;
-else,checkpointPath=fullfile(checkpointFolder,pointer.path);end
-% The checkpoint API normalizes imported state fields without writing it;
+[cp,pointer]=ipm_cr.io.checkpoint('load',checkpointFolder);
+checkpointPath=fullfile(checkpointFolder,pointer.path);
+% The checkpoint read is independent of the solver;
 % no context, RHS, background, interpolation or time step is run here.
 state=cp.state;g=cp.geometry;c=g.core;p=g.polar;
 assert(state.scale.canonicalTime==pointer.tau&&state.step==pointer.sequence, ...
@@ -149,7 +140,7 @@ report=struct('kind','accepted_native_hybrid_grid_mesh_figures_v1', ...
     'checkpoint',pointer,'tau',state.scale.canonicalTime,'rhoOrigin',rho0, ...
     'totalDensityRange',rhoRange,'centeredDensityRange',[min(allW),max(allW)], ...
     'source','Only saved W and rhs.q (or their historical rho/flow.q aliases); no RHS or time evolution is run.', ...
-    'checkpointReadMode',mode, ...
+    'checkpointReadMode','v2', ...
     'style','journal-minimal; canvas enlarged for two native-grid panels', ...
     'styleHelper',styleIdentity, ...
     'globalDisplay','Height W=rho-rho(0,0); left actual X,Y, right s*cos(theta),s*sin(theta), s=log10(1+r). All active polar rows/angles and active core nodes are retained.', ...
@@ -164,10 +155,10 @@ report=struct('kind','accepted_native_hybrid_grid_mesh_figures_v1', ...
         sprintf('Global density at tau=%.17g. The vertical offset is rho(0,0)=%.17g, so rho equals the plotted height plus this constant. Left: physical coordinates over the full radius %.17g. Right: explicitly compressed log-radius coordinates. No node decimation.',state.scale.canonicalTime,rho0,p.r(end)), ...
         sprintf('rho_X at tau=%.17g on the actual uniform Cartesian core and mapped polar annulus. Blue: active Cartesian mesh. Orange: active polar mesh. The right panel includes the complete overlap twice because both patches evolve there.',state.scale.canonicalTime), ...
         'Top view of actual transport nodes: solid blue/orange boundaries delimit the active Cartesian rectangle and first active annular ring. Gray dotted lines show three algebraic ghost layers. The overlap is a two-dimensional region, not a single fitted seam. Chebyshev Poisson nodes are a separate discretization and are not drawn.'}});
-report.script=struct('path',mfilename('fullpath'),'sha256',ipm_cr.io.sha([mfilename('fullpath'),'.m']));
-report.acceptedCheckpointUnchanged=strcmp(ipm_cr.io.sha(checkpointPath),pointer.sha256);
+report.script=struct('path',mfilename('fullpath'),'sha256',ipm_cr.io.identity('sha',[mfilename('fullpath'),'.m']));
+report.acceptedCheckpointUnchanged=strcmp(ipm_cr.io.identity('sha',checkpointPath),pointer.sha256);
 assert(report.acceptedCheckpointUnchanged,'ipm_cr:PlotMutation');
-assert(strcmp(ipm_cr.io.sha(stylePath),styleIdentity.sha256), ...
+assert(strcmp(ipm_cr.io.identity('sha',stylePath),styleIdentity.sha256), ...
     'ipm_cr:PlotStyleChanged','Local style helper changed during plotting.');
 fid=fopen(fullfile(outputDir,'plots.json'),'w');cleanup=onCleanup(@()fclose(fid)); %#ok<NASGU>
 fwrite(fid,jsonencode(report,'PrettyPrint',true),'char');

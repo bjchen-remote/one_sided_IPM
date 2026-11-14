@@ -1,5 +1,8 @@
 # 候选原生节点有限元 Poisson
 
+> 历史方法与结果。使用对应的冻结版本复现。当前 B 样条实现见 [架构](ARCHITECTURE.md)。
+
+
 当前 `codex/mainline-adaptive-20261102` 默认后端为 `fem`，尚未部署 NAS 主干。配置由 `ipm_cr.config` 和 `poisson.fem.options` 解析：
 
 已实现的默认布局为 `nodalLayout='native'`：全局流函数未知量严格使用输运的原生 `x/y/r/theta`、物理 `X/Y` 与同 shape 数组；不仅共享 patch 外框。该布局在 `b890305` 冻结版本已有组件及有限空间/时间证据；当前还移除了运行期数值验收与备用路径，并固定每次线性解作一次弱残差修正；样条分段 RK4 及周期 remesh 已通过 `compute_only_release_05` 请求检查，缩短后的三段复现仍未完成。源和物理模型不变，旧证据不自动认证新版本。

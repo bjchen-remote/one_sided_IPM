@@ -1,9 +1,9 @@
 function [summary,state,ctx]=run(overrides)
 %RUN Accepted-only, resumable explicit hybrid trajectory using the public API.
-% Use config('case') or a JSON case filename. Legacy flat inputs are resolved
-% only by config. Stops occur at accepted endpoints; tauEnd is an exact cap,
+% Use config('case') or a JSON case filename. Stops occur at accepted
+% endpoints. The canonical-time target is an exact cap,
 % while physical-time thresholds report any accepted-step overshoot.
-if nargin<1,overrides=struct();end
+if nargin<1,overrides=ipm_cr.config('case');end
 if ischar(overrides)||isstring(overrides),overrides=jsondecode(fileread(overrides));end
 root=ipm_cr.io.identity('root');
 [opts,resolved,requested]=ipm_cr.config(overrides,'run');folder=opts.outputDir;
@@ -16,6 +16,7 @@ logCleanup=onCleanup(@()fclose(logfid)); %#ok<NASGU>
 threads=maxNumCompThreads(1);threadCleanup=onCleanup(@()maxNumCompThreads(threads)); %#ok<NASGU>
 timer=tic;state=[];ctx=[];g=[];wallOps=[];method=[];pointer=[];priorWall=0;
 auditHistory=struct([]);remeshHistory=struct([]);
+
 historyColumns=ipm_cr.io.history('columns');history=zeros(0,numel(historyColumns));
 manifest=struct([]);authority=struct();
 summary=struct('kind','ipm_cr_run_v2','status','initializing', ...
@@ -43,7 +44,7 @@ try
         state=checkpoint.state;g=checkpoint.geometry;wallOps=checkpoint.wallOps;
         history=checkpoint.history;
         if isfield(checkpoint,'remeshHistory'),remeshHistory=checkpoint.remeshHistory;end
-        verify_mesh_history(folder,remeshHistory);
+        ipm_cr.io.checkpoint('verifyMesh',folder,remeshHistory);
         savedSeed=[];
         if isfield(checkpoint.runnerOptions,'seed'),savedSeed=checkpoint.runnerOptions.seed;end
         if isempty(opts.seed),opts.seed=savedSeed;end
@@ -54,7 +55,7 @@ try
             % A frozen run can move between machines or directories. The
             % content and actual seed time are identity; its absolute path
             % is only the current location, checked again on every resume.
-            assert(isfile(opts.seed.file)&&strcmp(ipm_cr.io.sha(opts.seed.file),opts.seed.sha256), ...
+            assert(isfile(opts.seed.file)&&strcmp(ipm_cr.io.identity('sha',opts.seed.file),opts.seed.sha256), ...
                 'ipm_cr:SeedIdentity','The resumed seed file does not match its declared SHA256.');
         end
         ctx=ipm_cr.context(g,wallOps,method);
@@ -86,11 +87,11 @@ try
     else
         authority=ipm_cr.io.identity('authority',root,resolved.initial);
         if isempty(opts.seed),[state,ctx]=ipm_cr.init(resolved);
-        else,[state,ctx]=from_seed(resolved,opts.seed);end
+        else,[state,ctx]=ipm_cr.io.checkpoint('seed',resolved,opts.seed);end
         g=ctx.mesh;wallOps=ctx.wall;method=ctx.opts;
         if isfield(state,'import'),summary.seedImport=state.import;end
         history=ipm_cr.io.history('row',state,struct(),toc(timer));summary.resumed=false;
-        [pointer,auditHistory]=commit(folder,state,g,wallOps,method,opts,history,historyColumns, ...
+        [pointer,auditHistory]=save_accepted(folder,state,g,wallOps,method,opts,history,historyColumns, ...
             manifest,authority,priorWall+toc(timer),pointer,auditHistory,remeshHistory);
         logline('INITIAL step=%d tau=%.17g core=%dx%d annulus=%dx%d cfl=%.6g', ...
             state.step,state.scale.canonicalTime,g.core.ny,g.core.nx,g.polar.nr,g.polar.ntheta,method.cfl);
@@ -113,15 +114,16 @@ try
         [trial,info]=ipm_cr.step(state,ctx,opts.tauEnd);
         [state,ctx,meshInfo]=ipm_cr.remesh(trial,ctx,method.remesh);
         if ~strcmp(meshInfo.status,'not_triggered')
-            entry=record_remesh(folder,g,ctx.mesh,meshInfo);
+            entry=ipm_cr.io.checkpoint('recordMesh',folder,g,ctx.mesh,meshInfo);
             if isempty(remeshHistory),remeshHistory=entry;else,remeshHistory(end+1)=entry;end %#ok<AGROW>
             logline('REMESH step=%d tau=%.12g status=%s reason=%s', ...
                 state.step,state.scale.canonicalTime,meshInfo.status,meshInfo.reason);
         end
+        tau=state.scale.canonicalTime;
         g=ctx.mesh;method=ctx.opts;
         history(end+1,:)=ipm_cr.io.history('row',state,info,priorWall+toc(timer)); %#ok<AGROW>
         if state.scale.canonicalTime>=nextCheckpoint||toc(timer)-lastCheckpointWall>=opts.checkpointWallSeconds
-            [pointer,auditHistory]=commit(folder,state,g,wallOps,method,opts,history,historyColumns, ...
+            [pointer,auditHistory]=save_accepted(folder,state,g,wallOps,method,opts,history,historyColumns, ...
                 manifest,authority,priorWall+toc(timer),pointer,auditHistory,remeshHistory);
             nextCheckpoint=(floor(state.scale.canonicalTime/opts.checkpointEveryTau)+1)*opts.checkpointEveryTau;
             lastCheckpointWall=toc(timer);
@@ -135,7 +137,7 @@ try
         if state.scale.canonicalTime>=opts.tauEnd,status='target_reached';else,status='maximum_steps';end
     end
     if isempty(pointer)||pointer.sequence~=state.step
-        [pointer,auditHistory]=commit(folder,state,g,wallOps,method,opts,history,historyColumns, ...
+        [pointer,auditHistory]=save_accepted(folder,state,g,wallOps,method,opts,history,historyColumns, ...
             manifest,authority,priorWall+toc(timer),pointer,auditHistory,remeshHistory);
     end
     summary=ipm_cr.io.history('summary',summary,status,state,g,method,history,historyColumns,pointer,priorWall,toc(timer));
@@ -144,7 +146,7 @@ try
     if ~isempty(opts.stop.physicalTime)
         summary.physicalTimeStopOvershoot=(state.scale.physicalTime-opts.stop.physicalTime)+state.scale.physicalTimeLow;
     end
-    ipm_cr.io.json(fullfile(folder,'case.json'),struct('format','ipm_cr_resolved_case_v1', ...
+    ipm_cr.io.identity('json',fullfile(folder,'case.json'),struct('format','ipm_cr_resolved_case_v1', ...
         'method',method,'run',opts,'authority',authority,'source',manifest));
     if opts.save.history
         writetable(array2table(history,'VariableNames',historyColumns),fullfile(folder,'history.csv'));
@@ -153,7 +155,7 @@ try
         if opts.save.history,packageHistory=history;else,packageHistory=[];end
         meta=struct('status',status,'label',opts.save.label,'acceptedCheckpoint',pointer, ...
             'stop',opts.stop);
-        summary.dataPackage=ipm_cr.pack(state,ctx,folder,meta,packageHistory,historyColumns);
+        summary.dataPackage=ipm_cr.io.export(state,ctx,folder,meta,packageHistory,historyColumns);
     end
     summary.invocationWallSeconds=toc(timer);summary.accumulatedWallSeconds=priorWall+toc(timer);
     summary.endedUtc=ipm_cr.io.identity('utc');
@@ -194,94 +196,19 @@ end
     end
 end
 
-function [state,ctx]=from_seed(method,seed)
-% An explicit cross-method/grid import is a NEW run, never a fake resume.
-assert(isfile(seed.file)&&strcmp(ipm_cr.io.sha(seed.file),seed.sha256), ...
-    'ipm_cr:SeedIdentity','Seed file does not match its declared SHA256.');
-loaded=load(seed.file,'checkpoint');
-assert(strcmp(ipm_cr.io.sha(seed.file),seed.sha256),'ipm_cr:SeedIdentity', ...
-    'Seed changed during read.');
-assert(isfield(loaded,'checkpoint'),'ipm_cr:Seed','A complete accepted checkpoint is required.');
-parent=loaded.checkpoint;
-assert(all(isfield(parent,{'state','geometry','wallOps','acceptedOnly'}))&&parent.acceptedOnly&& ...
-    isfield(parent.state,'W')&&parent.state.scale.canonicalTime==seed.tau, ...
-    'ipm_cr:Seed','Seed is not an accepted state at the declared actual tau.');
-[~,cfg]=ipm_cr.config(method);[wall,~,reference]=ipm_cr.model.reference(cfg);
-assert(isequaln(wall,parent.wallOps),'ipm_cr:SeedAuthority','Seed original wall differs.');
-assert(isfield(parent,'explicitOptions')&& ...
-    isequaln(parent.explicitOptions.background,method.background), ...
-    'ipm_cr:SeedBackground','Import cannot reinterpret the residual under a different background.');
-assert(isfield(parent,'authority')&&isfield(parent.authority,'sha256')&& ...
-    strcmp(parent.authority.sha256,cfg.authoritySha), ...
-    'ipm_cr:SeedAuthority','Seed initial authority differs.');
-g=ipm_cr.mesh.build(method.geometry);ctx=ipm_cr.context(g,wall,method);
-[state,transfer]=ipm_cr.remesh('transfer',parent.state,parent.geometry,g);
-if isfield(state,'remesh'),state=rmfield(state,'remesh');end
-state.ctxId=ctx.id;state.ctxKey=ctx.key;
-[state.rhs,state.W]=ipm_cr.rhs(state,ctx);
-comparison=seed_comparison(parent.state,parent.geometry,state,g,method);
-state.import=struct('kind','explicit_cross_method_or_grid_seed_v1', ...
-    'file',seed.file,'sha256',seed.sha256,'tau',seed.tau,'parentStep',state.step, ...
-    'transfer',transfer,'comparison',comparison, ...
-    'sameMethodContinuationClaimed',false,'timeRelabeled',false, ...
-    'originalGeometryKind',parent.geometry.kind,'initialGeometryKind',g.kind, ...
-    'gaugeResidual',state.rhs.gaugeResidual,'poisson',state.rhs.poisson);
-end
-
-function result=seed_comparison(a,ga,b,gb,method)
-[x,y]=meshgrid(linspace(gb.core.activeXBounds(1),gb.core.activeXBounds(2),17), ...
-    linspace(0,gb.core.activeYBounds(2),17));
-r=exp(linspace(log(gb.polar.innerActiveRadius),log(gb.polar.r(end)),17))';r(end)=gb.polar.r(end);
-theta=linspace(0,pi,17);px=r*cos(theta);py=r*sin(theta);py(:,[1,end])=0;
-X=[x(:);px(:)];Y=[y(:);py(:)];result=struct('queryCount',numel(X));
-% Honor the same analytic-background representation as the public sampler.
-% Interpolating complete W would instead measure coarse interpolation of H,
-% even when the actual transferred residual is exactly unchanged.
-av=ipm_cr.diag.fields(a,ga,method,X,Y);bv=ipm_cr.diag.fields(b,gb,method,X,Y);
-for name={'W','q','F','Q'}
-    key=name{1};aa=av.(key);bb=bv.(key);
-    result.(key)=max(abs(aa-bb)./max(1,max(abs(aa),abs(bb))));
-end
-result.scope='saved parent and fresh import using analytic background plus sampled residual at common physical points; not continuum truth';
-end
-
-function [pointer,audits]=commit(folder,state,g,wall,method,opts,history,names,source,authority,seconds,pointer,audits,remeshHistory)
-cp=struct('state',state,'geometry',g,'wallOps',wall,'explicitOptions',method, ...
-    'runnerOptions',opts,'history',history,'historyColumns',{names}, ...
-    'sourceInventory',source,'authority',authority,'auditHistory',audits,'remeshHistory',remeshHistory, ...
-    'accumulatedWallSeconds',seconds);
-[pointer,cp]=ipm_cr.io.checkpoint('save',folder,cp,pointer);audits=cp.auditHistory;
-end
-
-function verify_mesh_history(folder,history)
-for k=1:numel(history)
-    entry=history(k);
-    assert(~isempty(regexp(entry.file,'^mesh/[A-Za-z0-9_]+\.mat$','once')), ...
-        'ipm_cr:RemeshStorage','Mesh lineage must reference a local mesh event basename.');
-    file=fullfile(folder,strrep(entry.file,'/',filesep));
-    assert(isfile(file)&&strcmp(ipm_cr.io.sha(file),entry.sha256), ...
-        'ipm_cr:RemeshStorage','Missing or changed mesh lineage file: %s.',entry.file);
-end
-end
-
-function entry=record_remesh(folder,before,after,info)
-% The accepted cursor owns this lineage. Orphan events after a crash cannot
-% overwrite an earlier event, and are not mistaken for committed geometry.
-directory=fullfile(folder,'mesh');if ~isfolder(directory),mkdir(directory);end
-temporary=[tempname(directory),'.mat'];
-event=struct('format','ipm_cr_remesh_event_v1','info',info, ...
-    'before',before.geometryKey,'after',after.geometryKey);
-save(temporary,'event','-v7.3');readback=load(temporary,'event');
-assert(isequaln(event,readback.event),'ipm_cr:RemeshStorage','Mesh event readback differs.');
-entry=struct('step',info.step,'tau',info.tau,'status',info.status, ...
-    'reason',info.reason,'file','','sha256',ipm_cr.io.sha(temporary));
-[~,name,extension]=fileparts(temporary);entry.file=['mesh/',name,extension];
-end
-
 function value=get(s,name,default)
 if isfield(s,name),value=s.(name);else,value=default;end
 end
 
 function release_owner(lock,channel,file)
 lock.release();channel.close();file.close();
+end
+
+function [pointer,audits]=save_accepted(folder,state,g,wall,method,opts,history,names,source,authority,seconds,pointer,audits,remeshHistory)
+% Compose and commit one accepted checkpoint.
+cp=struct('state',state,'geometry',g,'wallOps',wall,'explicitOptions',method, ...
+    'runnerOptions',opts,'history',history,'historyColumns',{names}, ...
+    'sourceInventory',source,'authority',authority,'auditHistory',audits,'remeshHistory',remeshHistory, ...
+    'accumulatedWallSeconds',seconds);
+[pointer,cp]=ipm_cr.io.checkpoint('save',folder,cp,pointer);audits=cp.auditHistory;
 end

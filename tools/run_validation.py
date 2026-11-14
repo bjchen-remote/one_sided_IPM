@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the single validation registry; research/history are explicit selections."""
+"""Run independent validation for the maintained B-spline method."""
 from pathlib import Path
 import argparse
 import copy
@@ -101,7 +101,7 @@ def build_receipt(binary, requested=None):
     else:
         candidates = sorted(set((ROOT / 'results').glob('native_build*/native_build.json')) |
                             set((ROOT / 'results').glob('validation_*/native_build/native_build.json')), reverse=True)
-    source_sha, binary_sha = sha(ROOT / 'src/+ipm_cr/+op/wenoMex.cpp'), sha(binary)
+    source_sha, binary_sha = sha(ROOT / 'src/+ipm_cr/+mesh/sampleMex.cpp'), sha(binary)
     for path in candidates:
         if path is None or not path.is_file():
             continue
@@ -127,7 +127,6 @@ def main():
     parser.add_argument('--suite', choices=tuple(value['suites']))
     parser.add_argument('--test', action='append', default=[], choices=tuple(entries), help='Select a registered test; repeat to combine')
     parser.add_argument('--list', action='store_true', help='Print the registry without MATLAB or source/native preflight')
-    parser.add_argument('--include-order', action='store_true', help='Compatibility option: append the explicit order study')
     parser.add_argument('--matlab', help='MATLAB executable; otherwise discover it on this host')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--timeout', type=float, help='Hard wall time for the entire MATLAB process; default is the sum of selected entry budgets')
@@ -148,8 +147,6 @@ def main():
     selected += args.test
     if not selected:
         selected = expand_suite(value, entries, 'quick')
-    if args.include_order:
-        selected.append('order')
     selected = list(dict.fromkeys(selected))
     overrides = json.loads(args.options.read_text()) if args.options else {}
     if not isinstance(overrides, dict) or set(overrides) - set(entries):
@@ -189,7 +186,7 @@ def main():
         item['options'].update(overrides.get(key, {}))
         plan.append(item)
     needs_native = any(item['requiresNative'] for item in plan)
-    binary = ROOT / ('src/+ipm_cr/+op/wenoMex' + mex_extension())
+    binary = ROOT / ('src/+ipm_cr/+mesh/sampleMex' + mex_extension())
     existing_receipt = build_receipt(binary, args.build_report) if needs_native else None
     build_native = needs_native and existing_receipt is None
     if build_native and args.no_build_native:
@@ -244,7 +241,7 @@ def main():
                  'output_baseline': target + ",'" + quote(inputs.get('baseline') or '') + "'",
                  'output_repetitions': target + ',' + options + '.repetitions'}
         lines += ["entry=struct('status','running','requiredChecksSatisfied',false,'qualificationSatisfied',[]);",
-                  'components.' + key + '=entry;ipm_cr.io.json(\'' + quote(components_file) + "',components);",
+                  'components.' + key + '=entry;ipm_cr.io.identity(\'json\',\'' + quote(components_file) + "',components);",
                   'componentTimer=tic;try',
                   'r=' + function + '(' + calls[item['call']] + ');',
                   'entry.requiredChecksSatisfied=logical(' + item['success'] + ');',
@@ -256,12 +253,12 @@ def main():
                   "elseif ~isempty(entry.qualificationSatisfied)&&~entry.qualificationSatisfied,entry.status='completed_measurements_unqualified';",
                   "else,entry.status='passed_requested_checks';end",
                   'entry.seconds=toc(componentTimer);components.' + key + '=entry;',
-                  "ipm_cr.io.json('" + quote(components_file) + "',components);",
+                  "ipm_cr.io.identity('json','" + quote(components_file) + "',components);",
                   "assert(entry.requiredChecksSatisfied,'ipm_cr:ValidationChecks','Required checks failed: " + key + "');",
                   'catch problem',
                   "entry.status='failed';entry.errorIdentifier=problem.identifier;entry.errorMessage=problem.message;entry.seconds=toc(componentTimer);",
                   'components.' + key + '=entry;',
-                  "ipm_cr.io.json('" + quote(components_file) + "',components);rethrow(problem);end"]
+                  "ipm_cr.io.identity('json','" + quote(components_file) + "',components);rethrow(problem);end"]
     script = output / 'validate.m'
     script.write_text('\n'.join(lines) + '\n')
     executable = args.matlab if args.prepare_only or not plan else matlab_executable(args.matlab)

@@ -6,7 +6,7 @@ if nargin<1,outputDir=fullfile(root,'results','test_main');end
 outputDir=char(java.io.File(outputDir).getCanonicalPath());
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'main.json')),'ipm_cr:MainTestFresh','Use a fresh output directory.');
-before=ipm_cr.io.identity('source');mainSha=ipm_cr.io.sha(fullfile(root,'main.m'));
+before=ipm_cr.io.identity('source');mainSha=ipm_cr.io.identity('sha',fullfile(root,'main.m'));
 old=pwd;restore=onCleanup(@()cd(old)); %#ok<NASGU>
 foreign=fullfile(outputDir,'foreign 工作目录');mkdir(foreign);cd(foreign);
 timer=tic;report=struct('kind','ipm_cr_main_expression_test_v1','passed',false, ...
@@ -15,8 +15,8 @@ try
     [c,example]=main('config');
     [~,resolvedDefault]=ipm_cr.config(c,'run');
     assert(isempty(example)&&isstruct(c)&&strcmp(c.format,'ipm_cr_case_v1')&& ...
-        strcmp(c.initial,'data/initial.json')&&strcmp(c.method.geometry.preset,'medium')&& ...
-        strcmp(c.method.poissonBackend,'fem')&&strcmp(resolvedDefault.transport.reconstruction,'linear5')&& ...
+        strcmp(c.initial,'data/initial_small_source.json')&&strcmp(c.method.geometry.preset,'medium')&& ...
+        resolvedDefault.cfl==.4&&resolvedDefault.geometry.interpolationWidth==7&& ...
         c.method.remesh.enabled&& ...
         strcmp(pwd,foreign),'ipm_cr:MainTestConfig');
     folder=fullfile(outputDir,'表达式 completed run with spaces');
@@ -27,8 +27,7 @@ try
     c.run.checkpointEveryTau=.001;c.run.checkpointWallSeconds=60;
     c.method=struct('geometry',struct('coreSpacing',.06, ...
         'grid',struct('nr',193,'ntheta',65,'firstSpacing',.06)), ...
-        'solverOptions',struct('coreDegree',[32,32],'angularDegree',40, ...
-        'polarDegree',12),'maxDt',.001,'cfl',.3);
+        'maxDt',.001,'cfl',.3);
     c.save.label='函数初值 UTF-8';
     % A custom expression close to the registered datum.
     rho0=@(x,y).71*.76*sqrt(pi)/2*(.8*erfc(-x/.76)+ ...
@@ -44,13 +43,13 @@ try
     startPointer=jsondecode(fileread(fullfile(folder,'initial.json')));
     startFile=fullfile(folder,startPointer.path);
     assert(startPointer.tau==0&&startPointer.sequence==0&& ...
-        strcmp(ipm_cr.io.sha(startFile),startPointer.sha256),'ipm_cr:MainTestStart', ...
+        strcmp(ipm_cr.io.identity('sha',startFile),startPointer.sha256),'ipm_cr:MainTestStart', ...
         'Initial reconstruction requires the hash-bound tau0 checkpoint.');
     retained=load(startFile,'checkpoint');start=retained.checkpoint;g=start.geometry;
     assert(start.state.step==0&&start.state.scale.canonicalTime==0, ...
         'ipm_cr:MainTestStart','The retained start must precede all evolution and remeshing.');
     initial=ctx.opts.initial;identity=ipm_cr.io.identity('authority',root,initial);
-    cfg=ipm_cr.problem(initial);loaded=load(cfg.authorityFile,'frame');
+    cfg=ipm_cr.model.initial.problem(initial);loaded=load(cfg.authorityFile,'frame');
     native=loaded.frame.native;expected=rho0(g.core.X,g.core.Y);
     mask=g.core.active;
     assert(isequaln(native.geometryKey,g.geometryKey)&& ...
@@ -68,7 +67,7 @@ try
     assert(reconstructionError<=64*eps(scale)&&~isfield(s0,'eta')&& ...
         strcmp(own.opts.background.kind,'none'),'ipm_cr:MainTestInitial');
     [~,~,refs]=ipm_cr.model.reference(cfg);
-    [~,~,oldRefs]=ipm_cr.model.reference(ipm_cr.problem('data/initial.json'));
+    [~,~,oldRefs]=ipm_cr.model.reference(ipm_cr.model.initial.problem('data/initial.json'));
     assert(isequaln(refs,s.originalAuthority)&&refs.I0>0&&refs.P0>0, ...
         'ipm_cr:MainTestReference','I/P/C must be rebuilt from the actual expression.');
     assert(~isequaln(refs,oldRefs),'ipm_cr:MainTestReference','Do not reuse the original Gaussian I/P/C.');
@@ -102,7 +101,7 @@ try
         strcmp(saved.runControls.save.label,c.save.label)&&contains(raw,'函数初值'), ...
         'ipm_cr:MainTestUtf8','Summary JSON must preserve Unicode paths and labels.');
     report.sourceUnchanged=isequaln(before,ipm_cr.io.identity('source'))&& ...
-        strcmp(mainSha,ipm_cr.io.sha(fullfile(root,'main.m')));
+        strcmp(mainSha,ipm_cr.io.identity('sha',fullfile(root,'main.m')));
     assert(report.sourceUnchanged,'ipm_cr:MainTestSource','Maintained input sources changed.');
     report.passed=true;report.status='passed_short_expression_entrypoint';
     report.foreignCwdRetained=true;report.relativeOutputWithSpacesAndUnicode=true;
@@ -116,9 +115,9 @@ try
 catch problem
     report.status='failed';report.errorIdentifier=problem.identifier;
     report.errorMessage=getReport(problem,'extended','hyperlinks','off');
-    report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'main.json'),report);rethrow(problem);
+    report.seconds=toc(timer);ipm_cr.io.identity('json',fullfile(outputDir,'main.json'),report);rethrow(problem);
 end
-report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'main.json'),report);
+report.seconds=toc(timer);ipm_cr.io.identity('json',fullfile(outputDir,'main.json'),report);
 end
 
 function verify(summary,s,ctx,cp,pointer)
@@ -135,8 +134,8 @@ assert(summary.maximumStageCfl<=.3*(1+64*eps)&&ctx.opts.cfl==.3, ...
     'ipm_cr:MainTestCfl','Recorded stage CFL failed the independent stability threshold.');
 package=summary.dataPackage;
 file=fullfile(package.folder,package.fieldFile);
-assert(strcmp(ipm_cr.io.sha(file),package.fieldSHA256)&& ...
-    strcmp(ipm_cr.io.sha(fullfile(package.folder,package.metadataFile)),package.metadataSHA256), ...
+assert(strcmp(ipm_cr.io.identity('sha',file),package.fieldSHA256)&& ...
+    strcmp(ipm_cr.io.identity('sha',fullfile(package.folder,package.metadataFile)),package.metadataSHA256), ...
     'ipm_cr:MainTestPackage');
 loaded=load(file,'data');data=loaded.data;
 assert(data.step==s.step&&isequaln(data.scale,s.scale)&&isequaln(data.method,ctx.opts), ...

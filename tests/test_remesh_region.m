@@ -14,13 +14,30 @@ timer=tic;report=struct('kind','static_positive_q_region_geometry_v1', ...
     'passed',false,'timeAdvanced',0,'contextConstructed',false,'newRHS',false, ...
     'newPoissonSolve',false,'continuumAccuracyCertified',false);
 try
-    g=ipm_cr.mesh.build(geometry());p=ipm_cr.remesh('config');
-    assert(p.level==.25,'ipm_cr:RegionTestDefaultLevel');
+    g=ipm_cr.mesh.build(geometry());p=ipm_cr.mesh.region.policy(struct());
+    assert(isequal(p.level,[.25,.80])&&p.threshold==.25,'ipm_cr:RegionTestDefaultLevel');
+    both=p;p.level=.25;
     widths=[.65,.42];k=sqrt(log(1/p.level));
     base=state(g,widths,1);shape=region(base,g,p);
     report.base=check_ellipse(shape,widths,k);
     report.geometry=struct('coreSize',size(g.core.X),'polarSize',size(g.polar.X), ...
         'activeDofCount',g.activeDofCount,'level',p.level);
+
+    % A slanted plume's highest point is away from the wall-normal line.
+    shear=1.4;slanted=base;
+    for patch={'core','polar'}
+        name=patch{1};z=g.(name);
+        slanted.rhs.q.(name)=exp(-((z.X-shear*z.Y)/widths(1)).^2-(z.Y/widths(2)).^2);
+    end
+    sections=ipm_cr.mesh.region.measure(slanted,g,both);
+    assert(all([sections.valid])&&isequal([sections.level],both.level));
+    normal=vertcat(sections.triggerExtents);
+    full=vertcat(sections.extents);
+    expected=sqrt(log(1./both.level(:)))/hypot(shear/widths(1),1/widths(2));
+    assert(all(abs(normal(:,2)./expected-1)<.025)&&all(normal(:,2)<.8*full(:,2)), ...
+        'ipm_cr:RegionTestPeakNormal','Measure the section through the main peak for both levels.');
+    report.peakNormal=struct('levels',both.level,'measured',normal(:,2), ...
+        'expected',expected,'contourMaxHeight',full(:,2));
 
     % A relative superlevel region must not change under positive amplitude
     % scaling; its peak and threshold scale by exactly the same factor.
@@ -34,13 +51,13 @@ try
     % Below-threshold changes accumulate against the retained reference,
     % rather than being discarded by comparing only consecutive checks.
     first=region(state(g,widths.*[1.10,1],1),g,p);
-    second=region(state(g,widths.*[1.21,1],1),g,p);
-    height=region(state(g,widths.*[1,1.25],1),g,p);
-    shrinking=region(state(g,widths.*[1,.78],1),g,p);
+    second=region(state(g,widths.*[1.28,1],1),g,p);
+    height=region(state(g,widths.*[1,1.30],1),g,p);
+    shrinking=region(state(g,widths.*[1,.72],1),g,p);
     report.widthFirst=check_ellipse(first,widths.*[1.10,1],k);
-    report.widthSecond=check_ellipse(second,widths.*[1.21,1],k);
-    report.height=check_ellipse(height,widths.*[1,1.25],k);
-    report.shrinking=check_ellipse(shrinking,widths.*[1,.78],k);
+    report.widthSecond=check_ellipse(second,widths.*[1.28,1],k);
+    report.height=check_ellipse(height,widths.*[1,1.30],k);
+    report.shrinking=check_ellipse(shrinking,widths.*[1,.72],k);
     d1=abs(first.extents./shape.extents-1);
     step2=abs(second.extents./first.extents-1);
     cumulative=abs(second.extents./shape.extents-1);
@@ -86,12 +103,12 @@ catch problem
 end
 persist();
     function persist()
-        report.elapsedSeconds=toc(timer);ipm_cr.io.json(file,report);
+        report.elapsedSeconds=toc(timer);ipm_cr.io.identity('json',file,report);
     end
 end
 
 function v=region(s,g,p)
-v=ipm_cr.remesh('region',s,g,p);
+v=ipm_cr.mesh.region.measure(s,g,p);
 assert(v.valid,'ipm_cr:RegionTestValid','Synthetic region is invalid: %s',v.reason);
 assert(v.wallConnected,'ipm_cr:RegionTestWallConnected');
 end

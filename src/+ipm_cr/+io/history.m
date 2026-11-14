@@ -50,7 +50,7 @@ s.invocationWallSeconds=elapsed;s.accumulatedWallSeconds=priorWall+elapsed;
 s.physicalTime=state.scale.physicalTime;s.physicalTimeLow=state.scale.physicalTimeLow;
 s.physicalTimeTail=get(state.scale,'physicalTimeTail',zeros(1,2));
 s.rates=[state.rhs.c_l,state.rhs.c_omega,state.rhs.c_r];s.explicitOptions=method;
-if isfield(method,'timeIntegrator'),s.timeIntegrator=method.timeIntegrator;else,s.timeIntegrator='ssprk3';end
+s.timeIntegrator='rk4';s.spatialMethod='quintic_bspline';
 s.coreSize=size(state.W.core);s.polarSize=size(state.W.polar);s.activeDofCount=g.activeDofCount;
 s.acceptedCheckpoint=pointer;s.historyRows=size(history,1);s.historyColumns=names;
 s.maximumStageCfl=finite_max(history(:,strcmp(names,'maximumStageCfl')));
@@ -72,7 +72,7 @@ end
 function write_summary(folder,summary,history,historyColumns)
 temporary=fullfile(folder,'summary.writing.mat');save(temporary,'summary','history','historyColumns','-v7.3');
 [ok,message]=movefile(temporary,fullfile(folder,'summary.mat'),'f');assert(ok,'ipm_cr:ExplicitSummary','%s',message);
-ipm_cr.io.json(fullfile(folder,'summary.json'),summary);
+ipm_cr.io.identity('json',fullfile(folder,'summary.json'),summary);
 end
 
 function value=get(s,name,default)

@@ -4,18 +4,17 @@ root=fileparts(fileparts(mfilename('fullpath')));addpath(fullfile(root,'src'));
 if nargin<1,outputDir=fullfile(root,'results','architecture');end
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'architecture.json')),'ipm_cr:ArchOutput','Use a fresh output directory.');
-method=struct('mesh',struct('coreSpacing',.06, ...
-    'grid',struct('nr',193,'ntheta',65,'firstSpacing',.06)), ...
-    'poisson',struct('coreDegree',[48,48],'angularDegree',64,'polarDegree',16,'rOuter',1e10));
+method=struct('geometry',struct('coreSpacing',.06, ...
+    'grid',struct('nr',193,'ntheta',65,'firstSpacing',.06)));
 timer=tic;[s,a]=ipm_cr.init(method);
 assert(isstruct(a.mesh)&&isa(a,'ipm_cr.context'),'ipm_cr:ArchMesh');
 assert(all(isfield(s,{'W','eta','rhs','scale','step','ctxId','ctxKey'}))&& ...
     ~any(isfield(s,{'rho','residual','flow'})),'ipm_cr:ArchState');
-canonical=ipm_cr.config(struct('geometry',method.mesh,'solverOptions',method.poisson));
+canonical=ipm_cr.config(method);
 assert(isequaln(a.opts,canonical),'ipm_cr:ArchConfig');
 assert(strcmp(s.ctxId,a.id)&&isequaln(s.ctxKey,a.key),'ipm_cr:ArchInputIdentity');
 % The original wall authority needs no transport-grid or state carrier.
-cfg=ipm_cr.problem();[wall,scale,refs,guess]=ipm_cr.model.reference(cfg);
+[~,cfg]=ipm_cr.config(method);[wall,scale,refs,guess]=ipm_cr.model.reference(cfg);
 assert(isequaln(wall,a.wall)&&isequaln(scale,rmfield(s.scale,'densityOrigin'))&& ...
     isequaln(refs,s.originalAuthority)&&isequal(size(guess),[1,2])&&all(isfinite(guess)), ...
     'ipm_cr:ArchAuthority');
@@ -28,11 +27,11 @@ expect(@()ipm_cr.model.reference(bad),'polar:T0ReferenceMismatch');
 % A valid file SHA cannot turn a late frame into a t0 reference.
 loaded=load(cfg.authorityFile,'frame');frame=loaded.frame;frame.tau=1;
 path=[tempname(outputDir),'.mat'];save(path,'frame','-v7');
-bad=cfg;bad.authorityFile=path;bad.authoritySha=ipm_cr.io.sha(path);
+bad=cfg;bad.authorityFile=path;bad.authoritySha=ipm_cr.io.identity('sha',path);
 expect(@()ipm_cr.model.reference(bad),'polar:T0AuthorityClock');
 x=[0,.3;-.4,.7];y=[0,.1;.3,.4];v=ipm_cr.sample(s,a,x,y);
 assert(isequal(size(v.W),size(x))&&all(isfinite(v.Q),'all'),'ipm_cr:ArchSample');
-assert(isequaln(v,ipm_cr.diag.fields(s,a.mesh,a.opts,x,y)),'ipm_cr:ArchReadout');
+assert(isequaln(v,ipm_cr.diagnostics.fields(s,a.mesh,a.opts,x,y)),'ipm_cr:ArchReadout');
 b=ipm_cr.context(a.mesh,a.wall,a.opts);
 assert(~strcmp(a.id,b.id)&&isequaln(a.key,b.key),'ipm_cr:ArchContextIdentity');
 recovered=ipm_cr.refresh(s,b);assert(isequaln(s.W,recovered.W),'ipm_cr:ArchRefresh');
@@ -65,9 +64,6 @@ g=ipm_cr.mesh.build(changed.geometry);
 c=ipm_cr.context(g,a.wall,changed);
 assert(isequal(size(g.core.X),size(a.mesh.core.X))&& ...
     ~isequal(g.core.x,a.mesh.core.x)&&~isequaln(s.ctxKey,c.key),'ipm_cr:ArchGeometryIdentity');
-changed=a.opts;changed.transport.smoothSpeedCoefficient=.11;
-c=ipm_cr.context(a.mesh,a.wall,changed);
-assert(~isequaln(s.ctxKey,c.key),'ipm_cr:ArchTransportIdentity');
 % Time policy may vary without changing the mathematical RHS identity.
 expectedDt=min([.0005,.95*.2/s.rhs.rate,.001-s.scale.canonicalTime]);
 [s,info]=ipm_cr.step(s,a,.001,struct('maxDt',.0005,'cfl',.2));
@@ -83,7 +79,7 @@ report=struct('kind','ipm_cr_public_architecture_v1','passed',true, ...
     'rhsReevaluation',isolation, ...
     'timePolicyIndependent',true,'referenceWithoutTransportGrid',true, ...
     'authorityShaAndDatumRejected',true,'lateReferenceRejected',true,'seconds',toc(timer));
-ipm_cr.io.json(fullfile(outputDir,'architecture.json'),report);
+ipm_cr.io.identity('json',fullfile(outputDir,'architecture.json'),report);
 fprintf('CR ARCH: state/setup identity, isolated contexts and generic sampling passed (%.3fs)\n',report.seconds);
 end
 

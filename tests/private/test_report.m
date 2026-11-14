@@ -5,7 +5,7 @@ assert(ischar(stem)&&~isempty(regexp(stem,'^[A-Za-z][A-Za-z0-9_]*$','once')), ..
     'ipm_cr:TestReportStem','Use one report basename.');
 temporary=fullfile(folder,[stem,'.writing.mat']);save(temporary,'report','-v7.3');
 move_checked(temporary,fullfile(folder,[stem,'.mat']));
-ipm_cr.io.json(fullfile(folder,[stem,'.json']),report);
+ipm_cr.io.identity('json',fullfile(folder,[stem,'.json']),report);
 end
 function move_checked(from,to)
 [ok,message]=movefile(from,to,'f');assert(ok,'ipm_cr:TestReportWrite','%s',message);

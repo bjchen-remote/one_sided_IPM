@@ -5,5 +5,5 @@ function values=sample(s,ctx,x,y)
 % interpolated. No advance, patch projection or comparison mask is applied.
 assert(isfield(s,'ctxId')&&strcmp(s.ctxId,ctx.id),'ipm_cr:StaleState', ...
     'State belongs to another context.');
-values=ipm_cr.diag.fields(s,ctx.mesh,ctx.opts,x,y);
+values=ipm_cr.diagnostics.fields(s,ctx.mesh,ctx.opts,x,y,ctx.spline);
 end

@@ -1,5 +1,8 @@
 # 显式参考 Poisson 后端与证据范围
 
+> 历史方法与结果。使用对应的冻结版本复现。当前 B 样条实现见 [架构](ARCHITECTURE.md)。
+
+
 本候选已实现的默认接口是 [原生节点 FEM](FEM_POISSON.md)：`nodalLayout='native'`、`degree=5`、`quadOrder=8`、`stride=[]`。`b890305` 冻结版本已有统一组件和有限空间/时间证据；当前求解链与周期 remesh 已通过 suite05，缩短后的 T1/T2/T3 尚未完成。`spectral` 和 `same_mesh_fd` 保留为显式选择的参考/实验后端，不能混淆为主干已部署算法。完整方法仍经 `config/init/context/rhs/run`，不另建演化入口。
 
 原生 FEM 的全局流函数未知量与对流逐位共用 `x/y/r/theta`、物理 `X/Y` 与 shape；连续原生节点直接成元，少量六次元吸收区间余数，最外一个完整径向元采用六次。源无关的动态规划只改善几何分组的 Gauss 插值条件，不移动节点或按 PDE 误差选分组。raw `psi` 直接使用原生节点系数，速度取同一局部有限元基函数的导数。局部 Gauss 点只求积，不是独立全局未知量；源到求积点与跨 patch 的迹传递仍存在。

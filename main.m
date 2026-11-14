@@ -5,7 +5,7 @@ function [summary,state,ctx]=main(input,density)
 % Relative output folders here are relative to this main.m, on every OS.
 root=fileparts(mfilename('fullpath'));
 addpath(fullfile(root,'src'),fullfile(root,'tools'),'-begin');
-assert(strcmp(char(java.io.File(ipm_cr.root()).getCanonicalPath()), ...
+assert(strcmp(char(java.io.File(ipm_cr.io.identity('root')).getCanonicalPath()), ...
     char(java.io.File(root).getCanonicalPath())), ...
     'ipm_cr:MainPath','Another ipm_cr package is shadowing this project.');
 
@@ -16,19 +16,17 @@ c.run.wallSeconds=600;            % budget for this call, in seconds
 c.run.outputDir=fullfile(root,'result');
 c.run.resume=true;                % continue this folder's accepted state
 c.domain.rmax=1e10;               % common transport and Poisson radius
-c.initial='data/initial.json';    % used when rho0=[] or when calling main(c)
+c.initial='data/initial_small_source.json';    % used when rho0=[] or when calling main(c)
 
 % Write any vectorized initial density here; no Gaussian parameter fit.
 rho0=[];                         % original registered Gaussian datum
 % rho0=@(x,y) (1+tanh(x)).*exp(-y.^2); % optional vectorized alternative
 % Set rho0=[] to use c.initial unchanged.
 
-% Actual nonuniform medium axes; coarse is their exact every-other subset.
-c.method.geometry=struct('preset','medium'); % 'coarse' halves each axis
-c.method.poissonBackend='fem';
+% Nonuniform thin staircase. Use 'coarse', 'medium', or 'fine'.
+c.method.geometry.preset='medium';
 c.method.remesh=struct('enabled',true);
-c.method.timeIntegrator='rk4';
-c.method.cfl=.3;                  % current-rate step formula; stages are observed
+c.method.cfl=.4;                  % current-rate step formula; stages are observed
 c.stop.physicalTime=[];           % optional original-physical-time threshold
 c.save.data=true;                 % native fields, geometry, scales and SHA
 c.save.history=true;
@@ -60,31 +58,19 @@ if isfield(input,'run')&&isfield(input.run,'outputDir')
     end
 end
 % Validate controls before building or generating any input files.
-[~,method]=ipm_cr.config(input,'run');
-nativeTransport=any(strcmp(method.transport.reconstruction,{'linear5','smooth_weno5'}));
+ipm_cr.config(input,'run');
 samplingBinary=fullfile(root,'src','+ipm_cr','+mesh',['sampleMex.',mexext]);
-if nativeTransport||~isfile(samplingBinary)
-    binary=fullfile(root,'src','+ipm_cr','+op',['wenoMex.',mexext]);
-    if ~isfile(binary)||~isfile(samplingBinary)
-        fprintf('Building the local %s kernel...\n',mexext);
-        try
-            build_ipm_cr_native();
-        catch problem
-            if strcmp(problem.identifier,'ipm_cr:NativeBuildCompiler')
-                error('ipm_cr:MainCompiler', ...
-                    'Select a supported C++ compiler once with mex -setup C++, then run main again.');
-            end
-            rethrow(problem);
-        end
-        rehash;
-    end
-    selected=which('ipm_cr.mesh.sampleMex');
-    assert(~isempty(selected)&&strcmp(char(java.io.File(selected).getCanonicalPath()), ...
-        char(java.io.File(samplingBinary).getCanonicalPath())), ...
-        'ipm_cr:MainKernel','The current project platform kernel is not on the MATLAB path.');
+if ~isfile(samplingBinary)
+    fprintf('Building the local %s sample kernel...\n',mexext);
+    build_ipm_cr_native();
+    rehash;
 end
+selected=which('ipm_cr.mesh.sampleMex');
+assert(~isempty(selected)&&strcmp(char(java.io.File(selected).getCanonicalPath()), ...
+    char(java.io.File(samplingBinary).getCanonicalPath())), ...
+    'ipm_cr:MainKernel','The current project platform kernel is not on the MATLAB path.');
 if ~isempty(density)
-    input.initial=set_initial(input,density);
+    input.initial=ipm_cr.model.initial.materialize(input,density);
 end
 [summary,state,ctx]=ipm_cr.run(input);
 if ~isempty(state)

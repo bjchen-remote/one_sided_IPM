@@ -18,9 +18,9 @@ end
 end
 
 function [opts,cfg]=method_options(overrides)
-initial='data/initial.json';
+initial='data/initial_small_source.json';
 if isfield(overrides,'initial'),initial=overrides.initial;end
-cfg=ipm_cr.problem(initial);p=cfg.physics;
+cfg=ipm_cr.model.initial.problem(initial);p=cfg.physics;
 sampled=isfield(p,'initialCondition')&&strcmp(p.initialCondition,'sampled_density');
 if sampled
     cfg.background=struct('kind','none');
@@ -28,54 +28,51 @@ else
     cfg.background=struct('kind','gaussian_primitive','amplitude',p.gaussianAmplitude, ...
         'centerX',p.gaussianCenterX,'widthX',p.gaussianWidthX,'widthY',p.gaussianWidthY, ...
         'skewWeight',p.gaussianSkewWeight,'tailCorrection',true);
+    if isfield(p,'gaussianSourceCutoff')
+        cfg.background.kind='compact_gaussian_source';
+        cfg.background.cutoff=p.gaussianSourceCutoff;
+        cfg.background.tailCorrection=false;
+    end
 end
-transport=cfg.transport;transport.reconstruction='linear5';transport.smoothSpeedCoefficient=.1;
-transport.centralDissipation=.2;
-opts=struct('geometry',struct('preset','medium'),'solverOptions',struct('coreDegree',[48,48], ...
-    'angularDegree',64,'polarDegree',16,'rOuter',1e10), ...
-    'transport',transport,'cfl',.3,'maxDt',.2, ...
-    'timeIntegrator','rk4','background',cfg.background,'initial',cfg.manifestFile, ...
-    'poissonBackend','fem','fdOptions',struct(),'femOptions',struct(), ...
-    'remesh',struct('enabled',true));
-overrides=aliases(overrides);
-names=fieldnames(overrides);
-for k=1:numel(names)
-    name=names{k};assert(isfield(opts,name),'ipm_cr:Config','Unknown numerical option %s.',name);
-    if strcmp(name,'transport')
-        opts.transport=merge(opts.transport,overrides.transport);
-    else,opts.(name)=overrides.(name);end
-end
+opts=struct('geometry',default_geometry(),'cfl',.4,'maxDt',.2, ...
+    'background',cfg.background,'initial',cfg.manifestFile,'remesh',struct('enabled',true));
+opts=merge(opts,overrides);
 for name={'cfl','maxDt'}
     validateattributes(opts.(name{1}),{'numeric'},{'scalar','real','finite','positive'});
 end
-opts.timeIntegrator=char(validatestring(opts.timeIntegrator,{'rk4','ssprk3'}));
-assert(((ischar(opts.poissonBackend)&&isrow(opts.poissonBackend))|| ...
-    (isstring(opts.poissonBackend)&&isscalar(opts.poissonBackend)))&& ...
-    any(strcmp(opts.poissonBackend,{'spectral','same_mesh_fd','fem'})), ...
-    'ipm_cr:PoissonBackend','Use spectral, same_mesh_fd, or the experimental fem backend.');
-opts.poissonBackend=char(opts.poissonBackend);
-validate_fd_options(opts.fdOptions);
-opts.femOptions=ipm_cr.poisson.fem.options(opts.femOptions);
-opts.remesh=ipm_cr.remesh('config',opts.remesh);
-for name={'geometry','solverOptions','transport','background'}
+for name={'geometry','background'}
     assert(isstruct(opts.(name{1}))&&isscalar(opts.(name{1})),'ipm_cr:Config','Use scalar module options.');
 end
+g=opts.geometry;
+if ~isfield(g,'interpolationWidth'),g.interpolationWidth=7;end
+assert(g.interpolationWidth>=7,'ipm_cr:SplineExchangeOrder', ...
+    'The spline method uses at least seven ghost donor points per axis.');
+if isfield(g,'staircase')&&g.staircase&&isfield(g,'preset')&& ...
+        ismember(string(g.preset),["coarse","medium"])&&~isfield(g,'interfaceAllocation')&& ...
+        (~isfield(g,'staircaseFine')||~g.staircaseFine)
+    g.interfaceAllocation=[-3,-2,.96,.60,.66,2];
+end
+opts.geometry=g;
+if isstruct(opts.remesh)&&isscalar(opts.remesh)&&~isfield(opts.remesh,'stopTau')&& ...
+        isfield(opts.geometry,'preset')&&strcmp(opts.geometry.preset,'coarse')
+    opts.remesh.stopTau=50;
+end
+opts.remesh=ipm_cr.mesh.region.policy(opts.remesh);
 if sampled
     assert(isfield(opts.background,'kind')&&strcmp(opts.background.kind,'none'), ...
         'ipm_cr:SampledBackground','A sampled density requires background.kind=''none''; no analytic background is defined.');
-end
-if isfield(opts.geometry,'grid'),retire_origin(opts.geometry.grid);end
-if isfield(opts.geometry,'grid')&&isfield(opts.geometry.grid,'rmax')&&isfield(opts.solverOptions,'rOuter')
-    assert(opts.geometry.grid.rmax==opts.solverOptions.rOuter,'ipm_cr:DomainRadius', ...
-        'Transport rmax and Poisson rOuter must agree. Set case.domain.rmax once.');
 end
 opts.initial=cfg.manifestFile;
 end
 
 function c=case_defaults()
-c=struct('format','ipm_cr_case_v1','initial','data/initial.json', ...
-    'domain',struct('rmax',1e10),'method',struct('geometry',struct('preset','medium')),'run',run_defaults(), ...
+c=struct('format','ipm_cr_case_v1','initial','data/initial_small_source.json', ...
+    'domain',struct('rmax',1e10),'method',struct('geometry',default_geometry()),'run',run_defaults(), ...
     'stop',stop_defaults(),'save',struct('data',true,'history',true,'label',''));
+end
+
+function g=default_geometry()
+g=struct('preset','medium','staircase',true);
 end
 
 function r=run_defaults()
@@ -91,51 +88,24 @@ end
 function [opts,requested]=run_options(input)
 opts=run_defaults();requested=struct();stop=stop_defaults();
 save=struct('data',true,'history',true,'label','');
-isCase=isfield(input,'format');
-if isCase
-    assert(strcmp(input.format,'ipm_cr_case_v1'),'ipm_cr:CaseFormat','Unknown experiment case format.');
-    allowed(input,{'format','initial','domain','method','run','stop','save'});
-    if isfield(input,'run'),opts=merge(opts,input.run);end
-    if isfield(input,'method'),requested=aliases(input.method);end
-    if isfield(input,'initial')
-        assert(~isfield(requested,'initial'),'ipm_cr:Config','Put initial in case.initial only.');
-        requested.initial=input.initial;
-    end
-    radius=1e10;
-    if isfield(input,'domain'),allowed(input.domain,{'rmax'});radius=input.domain.rmax;end
-    validateattributes(radius,{'numeric'},{'scalar','real','finite','positive'});
-    if ~isfield(requested,'geometry'),requested.geometry=struct('preset','medium');end
-    if ~isfield(requested.geometry,'grid'),requested.geometry.grid=struct();end
-    if ~isfield(requested,'solverOptions'),requested.solverOptions=struct();end
-    if isfield(requested.geometry.grid,'rmax')
-        assert(requested.geometry.grid.rmax==radius,'ipm_cr:DomainRadius','Conflicting domain radii.');
-    end
-    if isfield(requested.solverOptions,'rOuter')
-        assert(requested.solverOptions.rOuter==radius,'ipm_cr:DomainRadius','Conflicting domain radii.');
-    end
-    requested.geometry.grid.rmax=radius;requested.solverOptions.rOuter=radius;
-else
-    % Compatibility exists at this one boundary, never in run/init loops.
-    names=fieldnames(input);method={'geometry','solverOptions','transport','cfl', ...
-        'maxDt','timeIntegrator','background','initial','mesh','poisson', ...
-        'poissonBackend','fdOptions','femOptions','remesh'};
-    if isfield(input,'explicitOptions'),requested=aliases(input.explicitOptions);end
-    direct=struct();
-    for k=1:numel(names)
-        name=names{k};
-        if strcmp(name,'explicitOptions')||ismember(name,{'stop','save'}),continue;end
-        if ismember(name,method),direct.(name)=input.(name);
-        else
-            assert(isfield(opts,name),'ipm_cr:Config','Unknown run option %s.',name);
-            opts.(name)=input.(name);
-        end
-    end
-    direct=aliases(direct);names=fieldnames(direct);
-    for k=1:numel(names)
-        name=names{k};assert(~isfield(requested,name),'ipm_cr:Config','Duplicate numerical option %s.',name);
-        requested.(name)=direct.(name);
-    end
+assert(isfield(input,'format')&&strcmp(input.format,'ipm_cr_case_v1'), ...
+    'ipm_cr:CaseFormat','Use an ipm_cr_case_v1 case.');
+allowed(input,{'format','initial','domain','method','run','stop','save'});
+if isfield(input,'run'),opts=merge(opts,input.run);end
+if isfield(input,'method'),requested=input.method;end
+if isfield(input,'initial')
+    assert(~isfield(requested,'initial'),'ipm_cr:Config','Put initial in case.initial only.');
+    requested.initial=input.initial;
 end
+radius=1e10;
+if isfield(input,'domain'),allowed(input.domain,{'rmax'});radius=input.domain.rmax;end
+validateattributes(radius,{'numeric'},{'scalar','real','finite','positive'});
+if ~isfield(requested,'geometry'),requested.geometry=default_geometry();end
+if ~isfield(requested.geometry,'grid'),requested.geometry.grid=struct();end
+if isfield(requested.geometry.grid,'rmax')
+    assert(requested.geometry.grid.rmax==radius,'ipm_cr:DomainRadius','Conflicting domain radii.');
+end
+requested.geometry.grid.rmax=radius;
 if isfield(input,'stop')
     value=input.stop;
     stop=merge(stop,value);
@@ -170,17 +140,6 @@ save.label=char(save.label);
 opts.stop=stop;opts.save=save;
 end
 
-function s=aliases(s)
-assert(isstruct(s)&&isscalar(s),'ipm_cr:Config','Use scalar numerical options.');
-for pair={{'mesh','geometry'},{'poisson','solverOptions'}}
-    p=pair{1};
-    if isfield(s,p{1})
-        assert(~isfield(s,p{2}),'ipm_cr:Config','Duplicate option alias %s.',p{2});
-        s.(p{2})=s.(p{1});s=rmfield(s,p{1});
-    end
-end
-end
-
 function out=merge(out,input)
 allowed(input,fieldnames(out));names=fieldnames(input);
 for k=1:numel(names),out.(names{k})=input.(names{k});end
@@ -194,31 +153,4 @@ end
 
 function flag(value)
 validateattributes(value,{'logical'},{'scalar'});
-end
-
-function validate_fd_options(options)
-assert(isstruct(options)&&isscalar(options)&& ...
-    all(ismember(fieldnames(options),{'width','traceWidth','outerBoundary'})), ...
-    'ipm_cr:FDOptions','Unknown same-mesh FD option.');
-for name={'width','traceWidth'}
-    if isfield(options,name{1})
-        value=options.(name{1});
-        assert(isnumeric(value)&&isreal(value)&&isscalar(value)&&isfinite(value)&&value==7, ...
-            'ipm_cr:FDOptions','The verified FD configuration uses width=traceWidth=7.');
-    end
-end
-if isfield(options,'outerBoundary')
-    value=options.outerBoundary;
-    assert(((ischar(value)&&isrow(value))||(isstring(value)&&isscalar(value)))&& ...
-        strcmp(value,'decay'),'ipm_cr:FDOptions', ...
-        'The same-mesh backend retains source-free exterior DtN (decay).');
-end
-end
-
-function retire_origin(g)
-for name={'originRings','originFitDegree'}
-    if isfield(g,name{1})
-        error('ipm_cr:RetiredOption','%s no longer affects the origin-free annulus; remove it.',name{1});
-    end
-end
 end

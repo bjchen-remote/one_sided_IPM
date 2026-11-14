@@ -27,7 +27,7 @@ assert(all(isfield(cfg.scaling,fixed))&& ...
     strcmp(cfg.scaling.scalingContract,'wall_integral_centroid_practical_v1')&& ...
     strcmp(cfg.scaling.gaugeTransportAssembly,'net_velocity_density_centered_advective'), ...
     'polar:T0GaugeSettings','Keep the original complete I/P/C and advective settings.');
-assert(isfile(cfg.authorityFile)&&strcmp(ipm_cr.io.sha(cfg.authorityFile),cfg.authoritySha), ...
+assert(isfile(cfg.authorityFile)&&strcmp(ipm_cr.io.identity('sha',cfg.authorityFile),cfg.authoritySha), ...
     'ipm_cr:ReferenceIdentity','The original datum SHA differs from the resolved configuration.');
 loaded=load(cfg.authorityFile,'frame');
 assert(isfield(loaded,'frame'),'polar:T0AuthorityFrame','The authority file must contain frame.');
@@ -43,22 +43,28 @@ assert(numel(x)>=7&&numel(y)>=7&&all(isfinite(x))&&all(diff(x)>0)&& ...
     all(isfinite(y))&&all(diff(y)>0)&&y(1)==0, ...
     'polar:T0OriginalAxes','Original axes must be finite and increasing from the wall.');
 [X,Y]=meshgrid(x,y);
+cutoff=intersect(fieldnames(p),{'gaussianCutoff','gaussianSourceCutoff'});
+compact=~isempty(cutoff);
 if sampled
     assert(isnumeric(f.rho)&&isreal(f.rho)&&isequal(size(f.rho),size(X))&& ...
         all(isfinite(f.rho),'all'),'polar:T0FrameDensity', ...
         'The sampled original density must be a finite real y-by-x array on its measurement axes.');
     analytic=f.rho;
 else
-    analytic=ipm_cr.model.initial(struct('X',X,'Y',Y,'ny',size(X,1),'nx',size(X,2)),p);
+    datum=p;if compact,datum=rmfield(p,cutoff);end
+    analytic=ipm_cr.model.initial.density(struct('X',X,'Y',Y),datum);
     assert(isequal(size(f.rho),size(analytic))&&all(isfinite(f.rho),'all'), ...
         'polar:T0FrameDensity','The original density has an incompatible shape.');
     assert(max(abs(analytic-f.rho),[],'all')<=256*eps(max(1,max(abs(f.rho),[],'all'))), ...
         'polar:T0AnalyticProvenance','Gaussian parameters do not reproduce original t0 rho.');
 end
-Dx=ipm_cr.mesh.fd(x,1,7);q=analytic(1,:)*Dx';
+Dx=ipm_cr.mesh.interpolate.metricDerivative(x,1,7);q=analytic(1,:)*Dx';
 if isfield(f,'w')
     assert(max(abs(q-f.w(1,:)))<=256*eps(max(1,max(abs(q)))), ...
         'polar:T0DerivativeProvenance','Rebuilt original wall Dx differs from the t0 source.');
+end
+if compact
+    q=ipm_cr.model.initial.density(struct('X',x,'Y',zeros(size(x))),p)*Dx';
 end
 settings=cfg.scaling;
 runtime={'pinIndex','pinX','originIndex','strainTarget','trackedPeakAnchor', ...
@@ -67,8 +73,8 @@ runtime={'pinIndex','pinX','originIndex','strainTarget','trackedPeakAnchor', ...
 present=runtime(isfield(settings,runtime));
 if ~isempty(present),settings=rmfield(settings,present);end
 settings.enabled=true;wall=struct('x',x,'Dx',Dx,'rescaling',settings);
-integral=ipm_cr.gauge.integral(q,wall,settings);
-peak=ipm_cr.gauge.peak(q,wall);centroid=ipm_cr.gauge.centroid(q,wall);
+integral=ipm_cr.gauge.observe.integral(q,wall,settings);
+peak=ipm_cr.gauge.peak(q,wall);centroid=ipm_cr.gauge.observe.centroid(q,wall);
 settings.referenceWallIntegral=integral.value;
 settings.referenceWallGradientCentroid=centroid.value;settings.pinX=peak.x;
 [~,settings.pinIndex]=min(abs(x-peak.x));[~,settings.originIndex]=min(abs(x));
@@ -88,7 +94,7 @@ scale=struct('logC_l',0,'logC_omega',0,'physicalTime',0,'physicalTimeLow',0, ...
 refs=struct('I0',integral.value,'P0',peak.value,'C0',centroid.value, ...
     'peakX0',peak.x,'wallIntegralRadius',settings.wallIntegralRadius);
 guess=[0,0];
-if all(isfield(f,{'transport_u1','u1'}))
+if ~compact&&all(isfield(f,{'transport_u1','u1'}))
     difference=f.transport_u1(1,:)-f.u1(1,:);
     guess(1)=(difference(end)-difference(1))/(x(end)-x(1));
     guess(2)=difference(settings.originIndex);

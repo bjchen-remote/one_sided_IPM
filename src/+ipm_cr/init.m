@@ -29,11 +29,11 @@ assert(strcmp(cfg.manifestSha,ctx.identity.authority.manifestSha256)&& ...
 if sampled
     W=struct('core',native.core-a,'polar',native.polar-a);
 else
-    density=@(X,Y)ipm_cr.model.initial(struct('X',X,'Y',Y,'ny',size(X,1),'nx',size(X,2)),cfg.physics);
+    density=@(X,Y)ipm_cr.model.initial.density(struct('X',X,'Y',Y,'ny',size(X,1),'nx',size(X,2)),cfg.physics);
     a=density(0,0);
     W=struct('core',density(g.core.X,g.core.Y)-a,'polar',density(g.polar.X,g.polar.Y)-a);
 end
-W=ipm_cr.mesh.fill(W,g);W.core(1,g.core.originIndex)=0;
+W=ipm_cr.mesh.exchange(W,g);W.core(1,g.core.originIndex)=0;
 scale.physicalTimeLow=0;scale.densityOrigin=a;
 % Keep the public state field order while constructing only one state form.
 s=struct('scale',scale,'step',0,'referencePeak',refs.P0, ...

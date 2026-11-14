@@ -9,12 +9,12 @@ assert(java.io.File(outputDir).isAbsolute(),'ipm_cr:RuntimeTestOutput','Use an a
 if ~isfolder(outputDir),mkdir(outputDir);end
 assert(~isfile(fullfile(outputDir,'runtime.json')),'ipm_cr:RuntimeTestFresh','Use a fresh output directory.');
 timer=tic;source=ipm_cr.io.identity('source');
-method=struct('geometry',struct('coreSpacing',.06, ...
-    'grid',struct('nr',193,'ntheta',65,'firstSpacing',.06)), ...
-    'solverOptions',struct('coreDegree',[48,48],'angularDegree',64,'polarDegree',16,'rOuter',1e10), ...
-    'cfl',.3,'maxDt',.2,'timeIntegrator','rk4');
 first=fullfile(outputDir,'original');moved=fullfile(outputDir,'moved');
-options=struct('outputDir',first,'tauEnd',.003,'wallSeconds',120,'verbose',false,'explicitOptions',method);
+options=ipm_cr.config('case');
+options.method.geometry=struct('preset','coarse','staircase',true);
+options.method.cfl=.3;
+options.run.outputDir=first;options.run.tauEnd=.003;
+options.run.wallSeconds=120;options.run.verbose=false;
 [initial,state,ctx]=ipm_cr.run(options);
 assert(strcmp(initial.status,'target_reached'),'ipm_cr:RuntimeTestInitial');
 [cp,pointer]=ipm_cr.io.checkpoint('load',first);
@@ -25,12 +25,12 @@ assert(~java.io.File(pointer.path).isAbsolute()&&cp.state.step==state.step,'ipm_
 reference=ipm_cr.refresh(state,ctx);
 while reference.scale.canonicalTime<.006
     [reference,info]=ipm_cr.step(reference,ctx,.006);
-    assert(info.realizedMaximumStageCfl<=method.cfl*(1+64*eps),'ipm_cr:RuntimeTestCfl');
+    assert(info.realizedMaximumStageCfl<=options.method.cfl*(1+64*eps),'ipm_cr:RuntimeTestCfl');
 end
 [ok,message]=copyfile(first,moved);assert(ok,'ipm_cr:RuntimeTestCopy','%s',message);
-options.tauEnd=.006;
+options.run.tauEnd=.006;
 [resumed,a]=ipm_cr.run(options);
-options.outputDir=moved;[relocated,b]=ipm_cr.run(options);
+options.run.outputDir=moved;[relocated,b]=ipm_cr.run(options);
 assert(resumed.resumed&&relocated.resumed&&strcmp(resumed.status,'target_reached')&& ...
     strcmp(relocated.status,'target_reached'),'ipm_cr:RuntimeTestResume');
 restart=compare_state(reference,a);migration=compare_state(a,b);
@@ -40,7 +40,7 @@ assert(restart.maximumRelativeDifference<=2e-11&&migration.maximumRelativeDiffer
 % A requested STOP must not replace an already-published accepted state.
 cursor=fullfile(moved,'latest.json');before=fileread(cursor);
 stop=fopen(fullfile(moved,'STOP'),'w');assert(stop>=0,'ipm_cr:RuntimeTestStop');fclose(stop);
-options.tauEnd=.009;stopped=ipm_cr.run(options);
+options.run.tauEnd=.009;stopped=ipm_cr.run(options);
 assert(strcmp(stopped.status,'stopped')&&strcmp(before,fileread(cursor)), ...
     'ipm_cr:RuntimeTestStop','STOP changed the durable accepted pointer.');
 
@@ -48,7 +48,7 @@ assert(strcmp(stopped.status,'stopped')&&strcmp(before,fileread(cursor)), ...
 corrupt=fullfile(outputDir,'corrupt');[ok,message]=copyfile(first,corrupt);
 assert(ok,'ipm_cr:RuntimeTestCopy','%s',message);
 bad=jsondecode(fileread(fullfile(corrupt,'latest.json')));bad.sha256=repmat('0',1,64);
-ipm_cr.io.json(fullfile(corrupt,'latest.json'),bad);
+ipm_cr.io.identity('json',fullfile(corrupt,'latest.json'),bad);
 expect_failure(@()ipm_cr.io.checkpoint('load',corrupt),'ipm_cr:CheckpointIdentity');
 
 % Reject an obsolete writer cursor before either currently accepted slot is touched.
@@ -70,40 +70,13 @@ assert(isequaln(source,ipm_cr.io.identity('source',clone))&& ...
     isequaln(ipm_cr.io.identity('authority'),ipm_cr.io.identity('authority',clone)), ...
     'ipm_cr:RuntimeTestProjectMove','Machine root leaked into a content identity.');
 
-% Historical imports remain explicit and read-only, never a v2 continuation.
-legacy=fullfile(outputDir,'legacy_fixture');mkdir(legacy);
-checkpoint=cp;checkpoint.kind='ipm_cr_explicit_accepted_checkpoint_v1';
-% Construct the historical schema only in this disposable v1 fixture.
-checkpoint.state.rho=checkpoint.state.W;checkpoint.state=rmfield(checkpoint.state,'W');
-if isfield(checkpoint.state,'eta')
-    checkpoint.state.residual=checkpoint.state.eta;checkpoint.state=rmfield(checkpoint.state,'eta');
-end
-checkpoint.state.flow=checkpoint.state.rhs;checkpoint.state=rmfield(checkpoint.state,'rhs');
-checkpoint.rho=checkpoint.state.rho;
-path=fullfile(legacy,'accepted_0.mat');save(path,'checkpoint','-v7.3');
-p=struct('kind','ipm_cr_explicit_accepted_pointer_v1','path',path,'generation',0, ...
-    'sequence',checkpoint.state.step,'tau',checkpoint.state.scale.canonicalTime,'sha256',ipm_cr.io.sha(path));
-ipm_cr.io.json(fullfile(legacy,'latest.json'),p);legacyBefore=fileread(fullfile(legacy,'latest.json'));
-expect_failure(@()ipm_cr.io.checkpoint('load',legacy),'ipm_cr:CheckpointLegacy');
-imported=ipm_cr.io.checkpoint('legacy',legacy);
-assert(isequaln(imported,checkpoint)&&strcmp(legacyBefore,fileread(fullfile(legacy,'latest.json'))), ...
-    'ipm_cr:RuntimeTestLegacy','Read-only legacy import changed historical data.');
-normalized=ipm_cr.io.checkpoint('import',legacy);
-assert(all(isfield(normalized.state,{'W','eta','rhs'}))&& ...
-    ~any(isfield(normalized.state,{'rho','residual','flow'}))&& ...
-    isequaln(normalized.state.W,checkpoint.state.rho)&& ...
-    isequaln(normalized.state.eta,checkpoint.state.residual)&& ...
-    isequaln(normalized.state.rhs,checkpoint.state.flow)&& ...
-    isequaln(rmfield(normalized,'state'),rmfield(checkpoint,'state'))&& ...
-    strcmp(legacyBefore,fileread(fullfile(legacy,'latest.json'))), ...
-    'ipm_cr:RuntimeTestImport','Normalized read-only import changed numerical data or historical files.');
 assert(isequaln(source,ipm_cr.io.identity('source')),'ipm_cr:RuntimeTestSources','Source changed during the runtime test.');
 report=struct('kind','ipm_cr_runtime_transactions_v2','passed',true, ...
     'restart',restart,'outputMigration',migration,'relativePointer',true, ...
     'stopPreservedPointer',true,'corruptShaRejected',true,'staleWriterRejected',true,'projectIdentityPortable',true, ...
-    'legacyImportExplicitReadOnly',true,'sourceUnchanged',true, ...
+    'sourceUnchanged',true, ...
     'trajectoryAccuracyCertified',false,'tauEnd',.006,'seconds',toc(timer));
-ipm_cr.io.json(fullfile(outputDir,'runtime.json'),report);
+ipm_cr.io.identity('json',fullfile(outputDir,'runtime.json'),report);
 end
 
 function metrics=compare_state(a,b)

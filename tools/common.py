@@ -121,12 +121,10 @@ def matlab_executable(requested=None):
     raise RuntimeError('MATLAB executable unavailable; pass --matlab /absolute/path/to/matlab')
 
 
-def require_kernel(root, options):
-    reconstruction = options.get('transport', {}).get('reconstruction', 'linear5')
-    if reconstruction in {'linear5', 'smooth_weno5'}:
-        path = root / ('src/+ipm_cr/+op/wenoMex' + mex_extension())
-        if not path.is_file():
-            raise RuntimeError('Build the current platform wenoMex kernel before starting a trajectory')
+def require_kernel(root):
+    path = root / ('src/+ipm_cr/+mesh/sampleMex' + mex_extension())
+    if not path.is_file():
+        raise RuntimeError('Build the current platform sampleMex kernel before starting a trajectory')
 
 
 def quote(path):

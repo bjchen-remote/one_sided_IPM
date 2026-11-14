@@ -1,5 +1,5 @@
 function report=test_remesh(outputDir,controls)
-%TEST_REMESH Active transfer, same-time redistribution and cold replay.
+%TEST_REMESH Active transfer, same-time mapped remesh and cold replay.
 % Uses only the public initial datum and a small mapped production geometry.
 % No time evolution or private saved trajectory is required.
 if nargin<2,controls=struct();end
@@ -17,12 +17,11 @@ timer=tic;report=struct('kind','portable_same_time_remesh_regression_v3', ...
     'status','running','passed',false,'timeAdvanced',0, ...
     'continuumAccuracyCertified',false,'adaptiveTrajectoryQualified',false);
 try
-    p=ipm_cr.remesh('config');
-    assert(p.enabled&&p.level==.25&&p.threshold==.2&&p.checkEveryTau==.5&& ...
-        p.minCheckEveryTau==.005&&numel(fieldnames(p))==9&&~isfield(p,'intervalTau')&& ...
-        isequaln(p,ipm_cr.remesh('config',p)),'ipm_cr:RemeshTestDefaults');
-    reject(@()ipm_cr.remesh('config',struct('typo',1)),'ipm_cr:RemeshOptions');
-    reject(@()ipm_cr.remesh('config',struct('blend',2)),'ipm_cr:RemeshOptions');
+    p=ipm_cr.mesh.region.policy(struct());
+    assert(p.enabled&&isequal(p.level,[.25,.80])&&p.threshold==.25&&p.checkEveryTau==.5&& ...
+        p.minCheckEveryTau==.005&&numel(fieldnames(p))==7&&isempty(p.stopTau)&&~isfield(p,'intervalTau')&& ...
+        isequaln(p,ipm_cr.mesh.region.policy(p)),'ipm_cr:RemeshTestDefaults');
+    reject(@()ipm_cr.mesh.region.policy(struct('typo',1)),'ipm_cr:RemeshOptions');
     geo=geometry(16);g=ipm_cr.mesh.build(geo);a=axes_of(g);
     a.x=a.x+1e-4*(a.x/1.2).*(1-(a.x/1.2).^2);
     a.y=a.y+1e-4*(a.y/1.2).*(1-a.y/1.2);
@@ -32,9 +31,10 @@ try
     % Endpoint continuation is explicit and still reproduces degree six.
     % Ordinary sampling/source maps must continue to reject extrapolation.
     nodes=linspace(-1,1,13)';queries=[-1.02;.17;1.02];
-    reject(@()ipm_cr.mesh.localMap(nodes,queries,7),'ipm_cr:CarrierInterpolation');
-    M=ipm_cr.mesh.localMap(nodes,queries,7,true);
-    report.endpointPolynomialError=max(abs(M*poly(nodes,0)-poly(queries,0)));
+    reject(@()ipm_cr.mesh.interpolate.local(nodes,queries,7),'ipm_cr:CarrierInterpolation');
+    M=ipm_cr.mesh.interpolate.local(nodes,queries,7,true);
+    sixth=@(x)poly(x,0)+.0002*x.^6;
+    report.endpointPolynomialError=max(abs(M*sixth(nodes)-sixth(queries)));
     assert(report.endpointPolynomialError<2e-12,'ipm_cr:RemeshTestPolynomial');
 
     % The two evolved patches deliberately disagree. A transfer may not
@@ -42,7 +42,7 @@ try
     fixture=synthetic(g);
     fixture.W.core(:)=.125;fixture.W.polar(:)=.375;
     fixture.W.core(g.core.ghost)=NaN;fixture.W.polar(g.polar.ghost)=Inf;
-    [transferred,audit]=ipm_cr.remesh('transfer',fixture,g,moved);
+    [transferred,audit]=ipm_cr.mesh.transfer(fixture,g,moved);
     inside=moved.core.active& ...
         moved.core.X>=g.core.activeXBounds(1)&moved.core.X<=g.core.activeXBounds(2)& ...
         moved.core.Y>=g.core.activeYBounds(1)&moved.core.Y<=g.core.activeYBounds(2);
@@ -59,11 +59,12 @@ try
         'ipm_cr:RemeshTestTransferIdentity');
     report.activeTransfer=audit;
 
-    polynomial=synthetic(g);polynomial.W.core=poly(g.core.X,g.core.Y);
+    polynomial=synthetic(g);polynomial.W.core=poly(g.core.X,g.core.Y)+.002*g.core.X.^5;
     polynomial.W.polar=.25+poly(g.polar.X/1e10,g.polar.Y/1e10);
     polynomial.W.core(g.core.ghost)=NaN;polynomial.W.polar(g.polar.ghost)=Inf;
-    pt=ipm_cr.remesh('transfer',polynomial,g,moved);
-    exact=poly(moved.core.X,moved.core.Y);
+    [pt,pAudit]=ipm_cr.mesh.transfer(polynomial,g,moved);
+    assert(pAudit.polynomialDegree==5&&pAudit.interpolationWidth==6,'ipm_cr:RemeshTestPolynomial');
+    exact=poly(moved.core.X,moved.core.Y)+.002*moved.core.X.^5;
     report.samePatchPolynomialError=max(abs(pt.W.core(moved.core.active)-exact(moved.core.active)));
     assert(report.samePatchPolynomialError<2e-12,'ipm_cr:RemeshTestPolynomial');
     % A resolved nonpolynomial field must continue through the old active
@@ -71,19 +72,12 @@ try
     resolved=synthetic(g);resolved.W.core=profile(g.core.X,g.core.Y);
     resolved.W.polar=.25+profile(g.polar.X,g.polar.Y);
     resolved.W.core(g.core.ghost)=NaN;resolved.W.polar(g.polar.ghost)=Inf;
-    rt=ipm_cr.remesh('transfer',resolved,g,moved);
+    rt=ipm_cr.mesh.transfer(resolved,g,moved);
     exact=profile(moved.core.X,moved.core.Y);error=abs(rt.W.core-exact);
     report.resolvedNonpolynomialError=max(error(moved.core.active));
     report.newlyExposedNonpolynomialError=max(error(exposed));
     assert(report.resolvedNonpolynomialError<1e-8, ...
         'ipm_cr:RemeshTestResolvedContinuation');
-    polynomial.rhs.q=struct('core',ones(size(g.core.X)),'polar',ones(size(g.polar.X)));
-    constantMonitor=ipm_cr.remesh('monitor',polynomial,g);
-    polynomial.rhs.q.core=exp(-((g.core.X+.25)/.08).^2-(g.core.Y/.07).^2);
-    localizedMonitor=ipm_cr.remesh('monitor',polynomial,g);
-    assert(constantMonitor.indicator<32*eps&&localizedMonitor.indicator>1e-2, ...
-        'ipm_cr:RemeshTestMonitor','The monitor must distinguish a constant from an unresolved source.');
-    report.monitor=struct('constant',constantMonitor.indicator,'localized',localizedMonitor.indicator);
     % Check cadence does not cause interpolation. Changes accumulate against
     % the last actual remesh reference, not against the preceding check.
     shapeState=region_state(g,1);shapeContext=struct('mesh',g);
@@ -94,6 +88,17 @@ try
         isequaln(shapeState.remesh.lastShape,shapeState.remesh.referenceShape), ...
         'ipm_cr:RemeshTestCalibration');
     fixedShape=shapeState.remesh.referenceShape;
+    cutoffState=shapeState;
+    before=struct('stopTau',50);
+    cutoffState.scale.canonicalTime=49.99;
+    [~,~,beforeCutoff]=ipm_cr.remesh(cutoffState,shapeContext,before);
+    assert(beforeCutoff.checked);
+    for tau=[50,50.01]
+        cutoffState.scale.canonicalTime=tau;
+        [after,sameContext,blocked]=ipm_cr.remesh(cutoffState,shapeContext,before,true);
+        assert(strcmp(blocked.reason,'past_stop_tau')&&~blocked.checked&&~blocked.remeshed);
+        assert(isequaln(after,cutoffState)&&isequaln(sameContext,shapeContext));
+    end
     for tau=[.1,.5,1,2,10,100]
         unchanged=shapeState;unchanged.scale.canonicalTime=tau;
         [checked,sameContext,event]=ipm_cr.remesh(unchanged,shapeContext,struct());
@@ -114,7 +119,8 @@ try
     near.scale.canonicalTime=near.remesh.lastCheckTau+p.checkEveryTau;
     [nearChecked,~,nearEvent]=ipm_cr.remesh(near,shapeContext,struct());
     expectedCadence=max(p.minCheckEveryTau,min(p.checkEveryTau, ...
-        .8*max(0,p.threshold-max(nearEvent.directionalChange))/max(nearEvent.directionalRateEstimate)));
+        .8*max(0,p.threshold-max(nearEvent.directionalChange,[],'all'))/ ...
+        max(nearEvent.directionalRateEstimate,[],'all')));
     assert(nearEvent.checked&&~nearEvent.triggered&&~nearEvent.remeshed&& ...
         nearEvent.checkCadence<p.checkEveryTau&&nearEvent.checkCadence>=p.minCheckEveryTau&& ...
         nearEvent.checkCadence==expectedCadence&& ...
@@ -128,12 +134,12 @@ try
     report.adaptiveCadence=struct('movingChange',nearEvent.directionalChange, ...
         'movingRate',nearEvent.directionalRateEstimate,'cadence',nearEvent.checkCadence, ...
         'nextCheckTau',nearChecked.remesh.nextCheckTau,'remeshed',false);
-    changes=zeros(3,2);shapeScales=[1.10,1.15,1.25];
+    changes=zeros(3,4);shapeScales=[1.10,1.15,1.30];
     for k=1:3
         test=region_state(g,shapeScales(k));
         test.remesh=shapeState.remesh;test.scale.canonicalTime=100+k*p.checkEveryTau;
         [checked,~,event]=ipm_cr.remesh(test,shapeContext,struct('candidateAxes',axes_of(g)));
-        changes(k,:)=event.directionalChange;
+        changes(k,:)=reshape(event.directionalChange.',1,[]);
         assert(event.triggered==(k==3)&&~event.remeshed&& ...
             isequaln(checked.remesh.referenceShape,fixedShape)&&checked.remesh.remeshCount==0, ...
             'ipm_cr:RemeshTestAccumulatedShape');
@@ -143,10 +149,16 @@ try
         max(changes(3,:))>=p.threshold,'ipm_cr:RemeshTestAccumulatedShape');
     report.shapeTrigger=struct('initialInterpolation',false,'unchangedTimes',[.1,.5,1,2,10,100], ...
         'directionalChanges',changes,'referenceUpdatedOnCheck',false);
+    inner=region_state(g,1);inner.remesh=shapeState.remesh;
+    inner.remesh.referenceShape(2).triggerExtents(1)= ...
+        2*inner.remesh.referenceShape(2).triggerExtents(1);
+    inner.scale.canonicalTime=inner.remesh.nextCheckTau;
+    [~,~,onlyInner]=ipm_cr.remesh(inner,shapeContext,struct('candidateAxes',axes_of(g)));
+    assert(isequal(onlyInner.triggerMask,logical([0,0;1,0]))&&onlyInner.triggered, ...
+        'ipm_cr:RemeshTestInnerLevel','The 80% horizontal scale can trigger by itself.');
     assert(toc(timer)<budget,'ipm_cr:RemeshTestBudget');
 
-    options=struct('geometry',geo,'poissonBackend','fem', ...
-        'solverOptions',struct('rOuter',1e10),'remesh',struct('enabled',false));
+    options=struct('geometry',geo,'remesh',struct('enabled',false));
     [s,c]=ipm_cr.init(options);
     beforeStats=c.stats();
     [disabled,disabledC,off]=ipm_cr.remesh(s,c,struct('enabled',false));
@@ -164,11 +176,13 @@ try
     % Model the same current Gaussian after expansion from a smaller earlier
     % calibrated region. The ordinary threshold path must really transfer.
     expanded=s;expanded.scale.canonicalTime=s.scale.canonicalTime+p.checkEveryTau;
-    for name={'xBounds','yBounds','widths','extents','peakXY','ownedPeakXY','monitorRadius'}
-        key=name{1};expanded.remesh.referenceShape.(key)=expanded.remesh.referenceShape.(key)/1.25;
+    for k=1:numel(p.level)
+        expanded.remesh.referenceShape(k).triggerExtents= ...
+            expanded.remesh.referenceShape(k).triggerExtents/1.26;
     end
+    expanded.remesh.initialExtents=s.remesh.initialExtents/1.25;
     [automatic,autoC,autoEvent]=ipm_cr.remesh(expanded,c,struct());
-    autoStats=autoC.stats();actualRegion=ipm_cr.remesh('region',automatic,autoC.mesh);
+    autoStats=autoC.stats();actualRegion=ipm_cr.mesh.region.measure(automatic,autoC.mesh,p);
     actualRegion=rmfield(actualRegion,'crossings');
     assert(autoEvent.triggered&&autoEvent.remeshed&&~autoEvent.forced&&autoC~=c&& ...
         autoStats.rhsPoissonCalls==1&& ...
@@ -176,29 +190,58 @@ try
         isequaln(automatic.originalAuthority,expanded.originalAuthority)&& ...
         isequaln(automatic.remesh.referenceShape,actualRegion)&& ...
         automatic.remesh.remeshCount==1&&isequaln(beforeStats,c.stats()), ...
-        'ipm_cr:RemeshTestAutomatic','A resolved 25%% accumulated shape change must execute one fresh-RHS remesh.');
+        'ipm_cr:RemeshTestAutomatic','An above-threshold shape change must execute one fresh-RHS remesh.');
     report.automaticThresholdEvent=autoEvent;
-    clear automatic autoC
-    [after,newC,event]=ipm_cr.remesh(s,c,struct(),true);
-    report.event=event;persist();
-    assert(event.remeshed&&strcmp(event.status,'remeshed')&&event.forced&&newC~=c&& ...
-        strcmp(after.ctxId,newC.id)&&isequaln(after.ctxKey,newC.key)&& ...
-        isequaln(newC.opts,c.opts),'ipm_cr:RemeshTestMove','The explicit forced pass did not redistribute.');
-    assert(isequaln(after.scale,s.scale)&&after.step==s.step&& ...
-        isequaln(after.originalAuthority,s.originalAuthority)&& ...
-        isequaln(newC.wall,c.wall)&&after.remesh.remeshCount==1&& ...
-        after.remesh.lastRemeshTau==s.scale.canonicalTime&& ...
-        isequaln(newC.mesh.polar.r,g.polar.r)&&isequaln(newC.mesh.polar.theta,g.polar.theta)&& ...
-        isequaln(newC.mesh.polar.drMetric,g.polar.drMetric)&& ...
-        isequal(newC.mesh.core.x([1,end]),g.core.x([1,end]))&& ...
-        isequal(newC.mesh.core.y([1,end]),g.core.y([1,end]))&& ...
+    after=automatic;newC=autoC;event=autoEvent;
+    proposal=event.geometryProposal;
+    expectedBounds=expanded.remesh.initialMesh.bounds.* ...
+        (event.region(1).extents./expanded.remesh.initialExtents);
+    assert(isequal(proposal.bounds,expectedBounds)&& ...
+        isequal([newC.mesh.core.x(end),newC.mesh.core.y(end)],expectedBounds)&& ...
+        isequal(size(newC.mesh.core.X),size(g.core.X))&& ...
+        isequal(newC.mesh.polar.theta,g.polar.theta)&& ...
+        newC.mesh.polar.r(1)==proposal.innerRadius&& ...
+        proposal.precedingRadius<proposal.requestedInnerRadius&& ...
+        proposal.requestedInnerRadius==.6*min(expectedBounds)&& ...
+        proposal.innerRadius>=proposal.requestedInnerRadius&& ...
+        newC.mesh.polar.r(1)~=g.polar.r(1)&&newC.mesh.polar.r(end)==g.polar.r(end)&& ...
         newC.mesh.core.x(newC.mesh.core.originIndex)==0, ...
-        'ipm_cr:RemeshTestFixedState');
-    stats=newC.stats();
-    assert(event.timeAdvanced==0&&after.rhs.diagnosticsComplete&& ...
-        stats.rhsPoissonCalls==1&&after.rhs.poisson.sameNativeGrid&& ...
+        'ipm_cr:RemeshTestMappedBounds');
+    assert(event.transfer.routes.core.crossPatch>0&& ...
+        ~event.transfer.fixedFrameContinuationAllowed&& ...
+        event.transfer.routes.core.samePatchBoundaryExtension==0&& ...
+        ~event.transfer.ghostValuesRead,'ipm_cr:RemeshTestMappedDonors');
+    % With both frames changed, the pure transfer and the production remesh
+    % use the same coverage routes. Test nonzero data at the crossing.
+    newg=newC.mesh;
+    transferred=ipm_cr.mesh.transfer(fixture,g,newg);
+    x=newg.core.X;y=newg.core.Y;
+    covered=x>=g.core.activeXBounds(1)&x<=g.core.activeXBounds(2)& ...
+        y>=g.core.activeYBounds(1)&y<=g.core.activeYBounds(2);
+    local=newg.core.active&covered;cross=newg.core.active&~covered;
+    assert(any(cross,'all')&&all(transferred.W.core(local)==.125)&& ...
+        all(transferred.W.core(cross)==.375), ...
+        'ipm_cr:RemeshTestCrossPatchValues');
+    smooth=synthetic(g);
+    for patch={'core','polar'}
+        k=patch{1};old=g.(k);
+        smooth.W.(k)=profile(old.X,old.Y);
+        smooth.W.(k)(old.ghost)=NaN;
+    end
+    transferred=ipm_cr.mesh.transfer(smooth,g,newg);
+    error=abs(transferred.W.core-profile(x,y));
+    report.mappedTransfer=struct('crossPatchNodes',nnz(cross), ...
+        'crossPatchMaximumError',max(error(cross)), ...
+        'samePatchMaximumError',max(error(local)));
+    assert(max(error(newg.core.active))<2e-6,'ipm_cr:RemeshTestMappedSmoothTransfer');
+    assert(event.timeAdvanced==0&&after.step==expanded.step&& ...
+        isequaln(after.referencePeak,expanded.referencePeak)&& ...
+        isequaln(after.remesh.initialMesh,expanded.remesh.initialMesh)&& ...
+        isequaln(after.remesh.initialExtents,expanded.remesh.initialExtents)&& ...
+        isequaln(newC.wall,c.wall)&&isequaln(newC.opts,c.opts)&& ...
+        strcmp(after.ctxId,newC.id)&&isequaln(after.ctxKey,newC.key)&& ...
+        after.rhs.diagnosticsComplete&&after.rhs.poisson.sameNativeGrid&& ...
         ~after.rhs.poisson.independentPoissonGridUsed,'ipm_cr:RemeshTestFreshRhs');
-    assert(isequaln(beforeStats,c.stats()),'ipm_cr:RemeshTestOldContextUntouched');
     [notYet,sameC,skip]=ipm_cr.remesh(after,newC,struct('enabled',true));
     assert(isequaln(notYet,after)&&sameC==newC&&strcmp(skip.reason,'check_cadence'), ...
         'ipm_cr:RemeshTestInterval','No due shape check may alter the accepted state.');
@@ -211,41 +254,8 @@ try
         unchanged.remesh.checks==after.remesh.checks+1&& ...
         isequaln(priorStats,newC.stats()),'ipm_cr:RemeshTestExactNodes', ...
         'Identical nodes must retain the original metrics and avoid a new RHS.');
-    [after,newC,followup]=ipm_cr.remesh(after,newC,struct(),true);
-    assert(followup.remeshed&&followup.forced&&after.remesh.remeshCount==2&& ...
-        after.remesh.lastRemeshTau==s.scale.canonicalTime&&isequaln(after.scale,s.scale), ...
-        'ipm_cr:RemeshTestForced','An explicit forced pass must adapt at the same physical time.');
     report.controller=struct('firstEndpointCalibratedOnly',true,'checkEveryTau',p.checkEveryTau, ...
-        'threshold',p.threshold,'forcedFollowupAdapted',true,'exactNodesRetainMetrics',true);
-    assert(toc(timer)<budget,'ipm_cr:RemeshTestBudget');
-
-    % Repeated same-time adaptation of the exact analytic Gaussian must
-    % approach one reference-based density, not multiply the current mesh
-    % density on every call. No runtime minimum-spacing gate is involved.
-    reference=after.remesh.referenceCore;referenceMin=[min(diff(reference.x)),min(diff(reference.y))];
-    motion=zeros(20,1);minimum=zeros(20,2);statuses=cell(20,1);
-    for k=1:numel(motion)
-        oldG=newC.mesh;
-        [next,nextC,move]=ipm_cr.remesh(after,newC,struct(),true);
-        newG=nextC.mesh;motion(k)=max([max(abs(newG.core.x-oldG.core.x)), ...
-            max(abs(newG.core.y-oldG.core.y))]);
-        minimum(k,:)=[min(diff(newG.core.x)),min(diff(newG.core.y))];statuses{k}=move.status;
-        assert(isequaln(next.scale,s.scale)&&next.step==s.step&& ...
-            isequaln(next.originalAuthority,s.originalAuthority)&& ...
-            isequaln(next.referencePeak,s.referencePeak)&& ...
-            isequaln(next.remesh.referenceCore,reference)&& ...
-            isequal(size(next.W.core),size(s.W.core))&& ...
-            isequal(size(next.W.polar),size(s.W.polar))&& ...
-            all(next.eta.core==0,'all')&&all(next.eta.polar==0,'all'), ...
-            'ipm_cr:RemeshTestRepeatedFixedState','Remeshing changed the same-time analytic state.');
-        after=next;newC=nextC;
-    end
-    assert(all(minimum>=referenceMin/(1+p.monitorStrength),'all')&& ...
-        (motion(end)<motion(1)||motion(end)<=64*eps(1.2)), ...
-        'ipm_cr:RemeshTestReferenceDensity','Repeated fixed-source remeshing drifted or did not settle.');
-    report.fixedSource=struct('iterations',numel(motion),'nodeMotion',motion, ...
-        'minimumSpacing',minimum,'referenceMinimumSpacing',referenceMin, ...
-        'statuses',{statuses},'timeAdvanced',0,'runtimeSpacingGateUsed',false);
+        'threshold',p.threshold,'exactNodesRetainMetrics',true);
     assert(toc(timer)<budget,'ipm_cr:RemeshTestBudget');
 
     % Serialize only data. A cold context must reconstruct every new mesh
@@ -261,8 +271,8 @@ try
     assert(errors.W==0&&errors.q==0&&max(errors.F,errors.Q)<1e-10&& ...
         isequaln(after.scale,replay.scale)&&isequaln(after.remesh,replay.remesh), ...
         'ipm_cr:RemeshTestColdRestore');
-    report.cold=struct('checkpointSha256',ipm_cr.io.sha(checkpoint),'differences',errors, ...
-        'controllerBitwise',true,'allScaleClockWordsBitwise',true);
+    report.cold=struct('checkpointSha256',ipm_cr.io.identity('sha',checkpoint),'differences',errors, ...
+        'controllerBitwise',true,'initialGeometryCalibrationBitwise',true,'allScaleClockWordsBitwise',true);
     replay.scale.canonicalTime=replay.scale.canonicalTime+p.checkEveryTau;
     [checked,sameC,event]=ipm_cr.remesh(replay,coldC,struct());
     assert(~event.remeshed&&event.checked&&sameC==coldC&& ...
@@ -280,7 +290,7 @@ catch problem
 end
 persist();
     function persist()
-        report.elapsedSeconds=toc(timer);ipm_cr.io.json(path,report);
+        report.elapsedSeconds=toc(timer);ipm_cr.io.identity('json',path,report);
     end
 end
 
@@ -298,7 +308,7 @@ a=struct('x',g.core.x,'y',g.core.y,'r',g.polar.r,'theta',g.polar.theta, ...
 end
 
 function value=metric(axis,logicalLength)
-value=ipm_cr.mesh.fd(linspace(0,logicalLength,numel(axis)),1,7)*axis(:)*logicalLength/(numel(axis)-1);
+value=ipm_cr.mesh.interpolate.metricDerivative(linspace(0,logicalLength,numel(axis)),1,7)*axis(:)*logicalLength/(numel(axis)-1);
 end
 
 function s=synthetic(g)
@@ -318,7 +328,7 @@ end
 end
 
 function v=poly(x,y)
-v=.125+.01*x-.02*y+.003*x.*y+.001*x.^2+.0002*x.^6-.0003*y.^5+.0001*(x.*y).^3;
+v=.125+.01*x-.02*y+.003*x.*y+.001*x.^2+.0002*x.^3-.0003*y.^3+.0001*(x.*y).^3;
 end
 
 function v=profile(x,y)

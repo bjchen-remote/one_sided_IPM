@@ -12,7 +12,7 @@ report=struct('kind','ipm_cr_synthetic_steady_logic_v1','passed',false,'status',
 try
     [base,ctx]=initial();p=struct('windowTau',1);
     s=base;s.rhs.F.core(1,1)=2e-7;s.rhs.Q.polar(3)=8e-7;
-    [~,r]=ipm_cr.diag.steady(s,ctx,p);
+    [~,r]=steady_diagnostics(s,ctx,p);
     check(r.regions.global.sampleCount==9&&r.regions.near.sampleCount==8&& ...
         r.regions.body.sampleCount==8&&r.regions.global.duplicateActiveOverlapRetained,'overlap copies');
     check(r.regions.global.F.denominator==2&&r.regions.global.Q.denominator==4&& ...
@@ -20,89 +20,89 @@ try
     check(r.regions.global.Q.maximumLocation.X==201&& ...
         strcmp(r.regions.global.Q.maximumLocation.patch,'polar'),'native peak location');
     report.checks.nativeNormsAndOverlap=true;
-    [t,r]=ipm_cr.diag.steady(base,ctx,p);
+    [t,r]=steady_diagnostics(base,ctx,p);
     check(~r.candidate&&~r.window.performed,'initial observation');
     for j=1:3
-        s=at(base,j,j);[t,r]=ipm_cr.diag.steady(s,ctx,p,t);
+        s=at(base,j,j);[t,r]=steady_diagnostics(s,ctx,p,t);
         check(r.window.performed&&r.window.passed&&r.consecutive==j,'nonoverlapping window');
         check(r.candidate==(j==3),'three-window candidate');
     end
     saved=t;
     for j=1:5
-        [t,repeat]=ipm_cr.diag.steady(s,ctx,p,t);
+        [t,repeat]=steady_diagnostics(s,ctx,p,t);
         check(repeat.duplicate&&repeat.consecutive==3&&isequaln(t,saved),'duplicate idempotence');
     end
     report.checks.nonoverlappingWindowsAndDuplicateIdempotence=true;
-    s=at(base,4,3.25);[t,r]=ipm_cr.diag.steady(s,ctx,p,t);
+    s=at(base,4,3.25);[t,r]=steady_diagnostics(s,ctx,p,t);
     check(~r.candidate&&~r.window.performed&&r.consecutive==3,'candidate is not sticky');
     s=at(base,5,3.5);s.rhs.F.polar(3)=1e-3;
-    [t,r]=ipm_cr.diag.steady(s,ctx,p,t);
+    [t,r]=steady_diagnostics(s,ctx,p,t);
     check(~r.currentResidualPassed&&~r.candidate&&r.consecutive==0&& ...
         r.regions.near.F.mixedInfinity==0&&r.regions.body.F.mixedInfinity==0&& ...
         r.regions.global.F.mixedInfinity>1e-6,'unmasked far F');
-    s=at(base,6,4);[t,r]=ipm_cr.diag.steady(s,ctx,p,t);
+    s=at(base,6,4);[t,r]=steady_diagnostics(s,ctx,p,t);
     check(r.currentResidualPassed&&r.window.performed&&~r.window.passed&& ...
         ~r.window.residualPassed&&r.consecutive==0,'intermediate residual failure retained');
     report.checks.nonstickyCandidateAndWholeWindowResiduals=true;
-    s=base;s.rhs.Q.polar(3)=1e-3;[~,r]=ipm_cr.diag.steady(s,ctx,p);
+    s=base;s.rhs.Q.polar(3)=1e-3;[~,r]=steady_diagnostics(s,ctx,p);
     check(~r.currentResidualPassed&&r.regions.global.F.mixedInfinity==0&& ...
         r.regions.near.Q.mixedInfinity==0&&r.regions.body.Q.mixedInfinity==0&& ...
         r.regions.global.Q.mixedInfinity>1e-6,'unmasked far Q');
     report.checks.fullFAndQBothRequired=true;
     p2=struct('windowTau',1,'windows',1,'minTau',3);
-    [u,~]=ipm_cr.diag.steady(base,ctx,p2);
-    [u,r]=ipm_cr.diag.steady(at(base,1,1),ctx,p2,u);
+    [u,~]=steady_diagnostics(base,ctx,p2);
+    [u,r]=steady_diagnostics(at(base,1,1),ctx,p2,u);
     check(r.window.passed&&~r.candidate,'minimum tau');
-    [~,r]=ipm_cr.diag.steady(at(base,2,3),ctx,p2,u);
+    [~,r]=steady_diagnostics(at(base,2,3),ctx,p2,u);
     check(r.candidate&&r.consecutive==2,'minimum tau reached');
-    [u,~]=ipm_cr.diag.steady(base,ctx,p);
-    [~,r]=ipm_cr.diag.steady(at(base,1,10),ctx,p,u);
+    [u,~]=steady_diagnostics(base,ctx,p);
+    [~,r]=steady_diagnostics(at(base,1,10),ctx,p,u);
     check(r.completedWindows==1&&r.consecutive==1&&~r.candidate,'one long interval is one window');
     report.checks.minimumTauAndNoInventedWindows=true;
     p3=struct('windowTau',1,'windows',1,'residualTol',1e-3,'changeTol',1e-8);
     for field={'W','q','F','Q','u1','u2'}
-        f=field{1};[u,~]=ipm_cr.diag.steady(base,ctx,p3);s=at(base,1,1);
+        f=field{1};[u,~]=steady_diagnostics(base,ctx,p3);s=at(base,1,1);
         if strcmp(f,'W'),s.W.core(1,1)=s.W.core(1,1)+1e-4;
         elseif ismember(f,{'q','F','Q'}),s.rhs.(f).core(1,1)=s.rhs.(f).core(1,1)+1e-4;
         else,s.rhs.physical.core.(f)(1,1)=s.rhs.physical.core.(f)(1,1)+1e-4;end
-        [~,r]=ipm_cr.diag.steady(s,ctx,p3,u);
+        [~,r]=steady_diagnostics(s,ctx,p3,u);
         check(r.currentResidualPassed&&~r.window.passed&& ...
             r.window.changes.(f).mixedInfinity>p3.changeTol,['window field ',f]);
     end
-    [u,~]=ipm_cr.diag.steady(base,ctx,p3);s=at(base,1,1);s.rhs.Uref=s.rhs.Uref+1e-4;
-    [~,r]=ipm_cr.diag.steady(s,ctx,p3,u);
+    [u,~]=steady_diagnostics(base,ctx,p3);s=at(base,1,1);s.rhs.Uref=s.rhs.Uref+1e-4;
+    [~,r]=steady_diagnostics(s,ctx,p3,u);
     check(r.window.changes.u1.absoluteInfinity==0&&r.window.changes.u1Centered.absoluteInfinity>0&& ...
         ~r.window.passed,'physical and Uref-subtracted velocity both retained');
     for field={'c_l','c_omega','c_r','delta','Uref'}
-        f=field{1};[u,~]=ipm_cr.diag.steady(base,ctx,p3);s=at(base,1,1);s.rhs.(f)=s.rhs.(f)+1e-4;
-        [~,r]=ipm_cr.diag.steady(s,ctx,p3,u);
+        f=field{1};[u,~]=steady_diagnostics(base,ctx,p3);s=at(base,1,1);s.rhs.(f)=s.rhs.(f)+1e-4;
+        [~,r]=steady_diagnostics(s,ctx,p3,u);
         check(~r.window.passed&&r.window.changes.rates.mixedInfinity>p3.changeTol,['rate ',f]);
     end
     report.checks.allRequestedFieldsAndRatesCompared=true;
-    a=base;a.W.core(1,1)=2.1;[u,~]=ipm_cr.diag.steady(a,ctx,p3);
+    a=base;a.W.core(1,1)=2.1;[u,~]=steady_diagnostics(a,ctx,p3);
     b=at(base,1,1);b.W.core(1,2)=2.1;
-    [~,r]=ipm_cr.diag.steady(b,ctx,p3,u);
+    [~,r]=steady_diagnostics(b,ctx,p3,u);
     check(~r.window.passed&&r.window.changes.W.absoluteInfinity>.09,'no shift or amplitude fit');
     report.checks.noAlignmentOrFit=true;
-    [u,~]=ipm_cr.diag.steady(base,ctx,p);
+    [u,~]=steady_diagnostics(base,ctx,p);
     changed=p;changed.windowTau=2;
-    expect(@()ipm_cr.diag.steady(base,ctx,changed,u),'ipm_cr:SteadyPolicyChanged');
+    expect(@()steady_diagnostics(base,ctx,changed,u),'ipm_cr:SteadyPolicyChanged');
     other=ctx;other.mesh.core.X(1,1)=-2;
-    expect(@()ipm_cr.diag.steady(base,other,p,u),'ipm_cr:SteadySetupChanged');
+    expect(@()steady_diagnostics(base,other,p,u),'ipm_cr:SteadySetupChanged');
     bad=base;bad.W.core(1,1)=3;
-    expect(@()ipm_cr.diag.steady(bad,ctx,p,u),'ipm_cr:SteadySequence');
-    [u,~]=ipm_cr.diag.steady(at(base,3,3),ctx,p);
-    expect(@()ipm_cr.diag.steady(at(base,4,2),ctx,p,u),'ipm_cr:SteadySequence');
+    expect(@()steady_diagnostics(bad,ctx,p,u),'ipm_cr:SteadySequence');
+    [u,~]=steady_diagnostics(at(base,3,3),ctx,p);
+    expect(@()steady_diagnostics(at(base,4,2),ctx,p,u),'ipm_cr:SteadySequence');
     report.checks.policySetupAndSequenceRejected=true;
     bad=base;bad.rhs.Q.polar(3)=NaN;
-    expect(@()ipm_cr.diag.steady(bad,ctx,p),'ipm_cr:SteadyFinite');
+    expect(@()steady_diagnostics(bad,ctx,p),'ipm_cr:SteadyFinite');
     bad=base;bad.rhs.physical.core.u1(1,1)=Inf;
-    expect(@()ipm_cr.diag.steady(bad,ctx,p),'ipm_cr:SteadyFinite');
+    expect(@()steady_diagnostics(bad,ctx,p),'ipm_cr:SteadyFinite');
     bad=base;bad.rhs.c_l=NaN;
-    expect(@()ipm_cr.diag.steady(bad,ctx,p),'ipm_cr:SteadyFinite');
+    expect(@()steady_diagnostics(bad,ctx,p),'ipm_cr:SteadyFinite');
     bad=base;bad.scale.canonicalTime=Inf;
-    expect(@()ipm_cr.diag.steady(bad,ctx,p),'ipm_cr:SteadyFinite');
-    expect(@()ipm_cr.diag.steady(base,ctx,struct('windows',0)),'ipm_cr:SteadyPolicy');
+    expect(@()steady_diagnostics(bad,ctx,p),'ipm_cr:SteadyFinite');
+    expect(@()steady_diagnostics(base,ctx,struct('windows',0)),'ipm_cr:SteadyPolicy');
     check(~r.steadyStateCertified&&~r.trajectoryAccuracyCertified&&~r.gridConvergenceCertified&& ...
         ~r.candidateIsAccuracyCertificate,'candidate is not a certificate');
     report.checks.nonfiniteRejectedAndNoCertificate=true;
@@ -110,9 +110,9 @@ try
 catch problem
     report.status='failed';report.errorIdentifier=problem.identifier;
     report.errorMessage=getReport(problem,'extended','hyperlinks','off');
-    report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'steady.json'),report);rethrow(problem);
+    report.seconds=toc(timer);ipm_cr.io.identity('json',fullfile(outputDir,'steady.json'),report);rethrow(problem);
 end
-report.seconds=toc(timer);ipm_cr.io.json(fullfile(outputDir,'steady.json'),report);
+report.seconds=toc(timer);ipm_cr.io.identity('json',fullfile(outputDir,'steady.json'),report);
 fprintf('CR STEADY: synthetic native norms/windows/rejections passed; no PDE qualification (%.3fs)\n',report.seconds);
 end
 

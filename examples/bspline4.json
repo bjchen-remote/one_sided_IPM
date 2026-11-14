@@ -1,0 +1,31 @@
+{
+  "format": "ipm_cr_case_v1",
+  "initial": "data/initial_small_source.json",
+  "domain": {
+    "rmax": 10000000000
+  },
+  "method": {
+    "geometry": {
+      "preset": "medium",
+      "staircase": true,
+      "interfaceAllocation": [
+        -3,
+        -2,
+        0.96,
+        0.6,
+        0.66,
+        2
+      ]
+    },
+    "cfl": 0.4
+  },
+  "run": {
+    "outputDir": "result_bspline4",
+    "tauEnd": 76
+  },
+  "save": {
+    "data": true,
+    "history": true,
+    "label": "Quintic spline finite-element candidate"
+  }
+}

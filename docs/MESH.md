@@ -1,5 +1,8 @@
 # 混合网格图集
 
+> 历史方法与结果。使用对应的冻结版本复现。当前 B 样条实现见 [架构](ARCHITECTURE.md)。
+
+
 这些图直接读取 `ipm_cr.mesh.build` 和谱网格构造器生成的真实节点，没有推进 PDE，也没有把网格替换成展示用规则采样。近场和连接区使用等比例原生 $(X,Y)$；全域另用明确标注的径向显示变换。蓝色表示 Cartesian 张量网格，珊瑚色表示极坐标网格；灰色虚线表示只参加插值交换的 ghost。
 
 
@@ -48,19 +51,4 @@ Poisson 求解使用独立的核心 Chebyshev 张量网格与分片对数径向�
 
 ## 复现
 
-在项目根目录运行，输出使用新的绝对目录：
-
-```matlab
-addpath('src','examples');
-export_mesh(fullfile(pwd,'results/mesh_export'));
-```
-
-```sh
-python3 tools/plot_mesh.py \
-  --input "$PWD/results/mesh_export/mesh.mat" \
-  --output "$PWD/results/mesh_plots"
-```
-
-Python 需要 NumPy、SciPy 和 Matplotlib ≥3.8。PNG 和矢量 PDF 随图集保存；复现脚本还生成 SVG。导出和绘图脚本随源码管理；图外记录保存精确配置、输入和脚本 SHA、坐标变换及绘图范围。默认绘图配置对应已测的中层方法，不把这套可视化视作所有计算的默认分辨率，也不新增精度阶资格。
-
-图像来源、精确配置与 SHA 见 [figures.json](figs/figures.json)。MAT 几何输入保存在本地 `results/mesh_export_20261022/mesh.mat`，可用上述导出命令重新生成。
+图像来源、精确配置与 SHA 见 [figures.json](figs/figures.json)。本地历史 MAT 为 `results/mesh_export_20261022/mesh.mat`，用 `tools/plot_mesh.py --input <mesh.mat> --output <新目录>` 重画。当前 v2 接受态可用 `examples/plot_ipm_cr_mesh.m` 查看原生节点。
