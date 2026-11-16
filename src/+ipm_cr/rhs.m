@@ -42,9 +42,23 @@ R=ipm_cr.mesh.interpolate.sample(W,map);
 R(1,:)=0;
 [m,observeRate]=ipm_cr.gauge.observe.wall(R,r,wallOps,struct('interpolation','linear'));
 Uref=ipm_cr.mesh.interpolate.sample(struct('core',physical.core.u1,'polar',physical.polar.u1),g,m.C,0);
-prepare=ipm_cr.space.transport(differentiated,g,ctx.spline);
+wallPlan=ctx.wallProbe;
+[prepare,probe]=ipm_cr.space.transport(differentiated,g,ctx.spline,wallPlan.nodes);
+keys={'core','polar'};probeValues=struct();
+for patch=keys
+    key=patch{1};nodes=wallPlan.nodes.(key);sites=wallPlan.sites.(key);
+    p=g.(key);v=physical.(key);
+    probeValues.(key)=struct('X',p.X(nodes),'Y',p.Y(nodes), ...
+        'u',v.u1(nodes)-Uref,'v',v.u2(nodes));
+    if split
+        bg=background.(key);
+        probeValues.(key).forcing=forcing.(key)(nodes);
+        probeValues.(key).siteX=p.X(sites);probeValues.(key).siteY=p.Y(sites);
+        probeValues.(key).Hx=bg.x(sites);probeValues.(key).Hy=bg.y(sites);
+    end
+end
 [rates,ginfo]=ipm_cr.gauge.rates(R,r,wallOps,@base,Uref,guess,m,observeRate);
-[B,rate,position,~,residualTransport,F0]=transport(rates.c_l,rates.delta);
+[B,rate,position,residualTransport,F0]=transport(rates.c_l,rates.delta);
 if split
     T0=residualTransport.core(1,g.core.originIndex);
     % The prescribed background may also depend explicitly on physical
@@ -140,48 +154,51 @@ if split
 end
 
     function [wall,partials]=base(cl,delta)
-        if nargout>1,[b,~,~,partials]=transport(cl,delta);
-        else,b=transport(cl,delta);end
-        if ~split,b=ipm_cr.mesh.exchange(b,g);end
-        wall=ipm_cr.mesh.interpolate.sample(b,map);
-        wall(1,:)=wall(1,1);
-        if nargout>1
-            for field={'c_l','delta'}
-                key=field{1};v=partials.(key);
-                if ~split,v=ipm_cr.mesh.exchange(v,g);end
-                partials.(key)=ipm_cr.mesh.interpolate.sample(v,map);
-                partials.(key)(1,:)=partials.(key)(1,1);
+        for patch=keys
+            key=patch{1};v=probeValues.(key);
+            vx.(key)=v.u+cl*v.X+delta;vy.(key)=v.v+cl*v.Y;
+        end
+        [b,partials]=probe(vx,vy);
+        if split
+            for patch=keys
+                key=patch{1};b.(key)=b.(key)+probeValues.(key).forcing;
             end
         end
+        b=ipm_cr.mesh.interpolate.wallExchange(b,wallPlan);
+        partials.c_l=ipm_cr.mesh.interpolate.wallExchange(partials.c_l,wallPlan);
+        partials.delta=ipm_cr.mesh.interpolate.wallExchange(partials.delta,wallPlan);
+        if split
+            cr=delta-Uref;
+            for patch=keys
+                key=patch{1};v=probeValues.(key);
+                b.(key)=b.(key)-(cl*v.siteX+cr).*v.Hx-cl*v.siteY.*v.Hy;
+                partials.c_l.(key)=partials.c_l.(key)-v.siteX.*v.Hx-v.siteY.*v.Hy;
+                partials.delta.(key)=partials.delta.(key)-v.Hx;
+            end
+        end
+        wall=sample_probe(b);
+        partials.c_l=sample_probe(partials.c_l);partials.delta=sample_probe(partials.delta);
     end
-    function [b,rate,position,partials,T,originTransport]=transport(cl,delta)
+    function values=sample_probe(field)
+        values=ipm_cr.mesh.interpolate.sample(field,wallPlan.map);
+        values(1,:)=values(1,1);
+    end
+    function [b,rate,position,T,originTransport]=transport(cl,delta)
         vx=struct('core',(physical.core.u1-Uref)+cl*g.core.X+delta, ...
             'polar',(physical.polar.u1-Uref)+cl*g.polar.X+delta);
         vy=struct('core',physical.core.u2+cl*g.core.Y,'polar',physical.polar.u2+cl*g.polar.Y);
-        partials=[];T=[];
-        request=struct('cfl',nargout>1&&nargout~=4,'partials',nargout==4);
-        result=prepare(vx,vy,request);
-        b=result.B;rate=result.rate;position=result.position;partials=result.partials;
+        T=[];
+        result=prepare(vx,vy);
+        b=result.B;rate=result.rate;position=result.position;
         originTransport=b.core(1,g.core.originIndex);
         if split
             originTransport=originTransport-vx.core(1,g.core.originIndex)*background.core.originX;
             T=ipm_cr.mesh.exchange(struct('core',b.core+forcing.core, ...
                 'polar',b.polar+forcing.polar),g);
             cr=delta-Uref;
-            for patch={'core','polar'}
+            for patch=keys
                 key=patch{1};p=g.(key);bg=background.(key);
                 b.(key)=T.(key)-(cl*p.X+cr).*bg.x-cl*p.Y.*bg.y;
-            end
-            if nargout==4
-                for field={'c_l','delta'}
-                    key=field{1};v=ipm_cr.mesh.exchange(partials.(key),g);
-                    for patch={'core','polar'}
-                        name=patch{1};p=g.(name);bg=background.(name);
-                        if strcmp(key,'c_l'),v.(name)=v.(name)-p.X.*bg.x-p.Y.*bg.y;
-                        else,v.(name)=v.(name)-bg.x;end
-                    end
-                    partials.(key)=v;
-                end
             end
         end
     end

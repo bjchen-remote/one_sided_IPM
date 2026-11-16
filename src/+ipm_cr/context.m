@@ -9,6 +9,7 @@ classdef context < handle
         key
         wallR
         wallMap
+        wallProbe
         identity
         spline
     end
@@ -34,6 +35,7 @@ classdef context < handle
             obj.identity=provenance;
             obj.key=context_key(g,wall,opts,provenance);obj.id=tempname;
             obj.pmap=fem;obj.wallR=r;obj.wallMap=map;
+            obj.wallProbe=ipm_cr.mesh.interpolate.wallPlan(g,map);
         end
         function [flow,info]=velocity(obj,source,includePsi)
             if nargin<3,includePsi=true;end

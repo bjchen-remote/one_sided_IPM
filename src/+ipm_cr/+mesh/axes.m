@@ -6,6 +6,7 @@ classdef axes
             switch action
                 case 'core',[out,info]=core(varargin{:});
                 case 'interfaceCore',[out,info]=interface_core(varargin{:});
+                case 'resize',out=resize_axes(varargin{:});info=[];
                 case 'radial',[out,info]=radial(varargin{:});
                 case 'matchRadial',[out,info,varargout{1}]=match_radial(varargin{:});
                 otherwise,error('ipm_cr:StairAxes','Unknown staircase axis operation.');
@@ -470,6 +471,9 @@ classdef axes
             initial=struct('bounds',[c.x(end),c.y(end)], ...
                 'coreMap',struct('intervals',[c.nx-1,c.ny-1],'minSpacing',spacing), ...
                 'theta',g.polar.theta,'radialGrid',grid,'radialStride',stride,'tailFactor',factor);
+            if isfield(g,'axisSource')&&isfield(g.axisSource,'referenceTheta')
+                initial.theta=g.axisSource.referenceTheta;
+            end
             if isfield(c,'stair')
                 initial.stairAxes=struct('x',c.x,'y',c.y,'dxMetric',c.dxMetric,'dyMetric',c.dyMetric);
                 if isfield(g.axisSource,'interfaceCore')
@@ -536,6 +540,14 @@ classdef axes
             if isfield(old.core,'stair')
                 geometry.staircase=true;
                 geometry.staircaseFine=old.axisSource.staircaseFine;
+                if isfield(old.axisSource,'k')
+                    geometry.k=old.axisSource.k;
+                elseif isfield(old.axisSource,'nodeCounts')
+                    geometry.nodeCounts=old.axisSource.nodeCounts;
+                end
+                if isfield(old.axisSource,'radialRatioLimit')
+                    geometry.radialRatioLimit=old.axisSource.radialRatioLimit;
+                end
                 if isfield(old.axisSource,'interfaceCore')
                     geometry.corePlateauIntervals=old.axisSource.interfaceCore.coreIntervals;
                 end
@@ -546,6 +558,26 @@ classdef axes
             new=ipm_cr.mesh.build(geometry);
         end
     end
+end
+
+function a=resize_axes(a,counts)
+% Resample the preset's Cartesian maps in their existing logical coordinates.
+if isfield(counts,'nx')&&counts.nx~=numel(a.x)
+    assert(mod(counts.nx,2)==1,'ipm_cr:MeshNodeCounts', ...
+        'nx must be odd to retain symmetry and an exact Cartesian origin.');
+    center=find(a.x==0,1);n=numel(a.x)-center;
+    [x,dx]=hermite(a.x(center:end),a.dxMetric(center:end),linspace(0,n,(counts.nx+1)/2));
+    dx=dx*(2*n/(counts.nx-1));
+    a.x=[-fliplr(x(2:end)),x];a.dxMetric=[fliplr(dx(2:end)),dx];
+end
+if isfield(counts,'ny')&&counts.ny~=numel(a.y)
+    n=numel(a.y)-1;
+    [y,dy]=hermite(a.y,a.dyMetric,linspace(0,n,counts.ny));
+    a.y=y(:);a.dyMetric=dy(:)*(n/(counts.ny-1));
+end
+% The angular and radial budgets are applied outside the Cartesian fit.
+fields={'x','y','r','theta','dxMetric','dyMetric','drMetric'};
+a=rmfield(a,setdiff(fieldnames(a),fields));
 end
 
 function [a,info]=interface_core(a,halo,coreIntervals)
@@ -718,7 +750,8 @@ d=d./(1+gain*t.^3.*(10-15*t+6*t.^2));
 r=-flip(rev(:));dr=flip(d(:));
 end
 
-function [r,dr,info]=match_radial(r,dr,core,cover,angle,halo,ratioLimit)
+function [r,dr,info]=match_radial(r,dr,core,cover,angle,halo,ratioLimit,requestedNr)
+if nargin<8,requestedNr=[];end
 % Along a ray, cos(theta)/dx + sin(theta)/dy counts Cartesian grid-line
 % crossings per unit radius. Match the median reciprocal at the interface.
 co=abs(cos(angle));si=sin(angle);
@@ -734,42 +767,15 @@ inner=cover;
 uniformCells=6;
 rampStart=inner+uniformCells*h;
 uniform=inner+(-halo:uniformCells)'*h;
-% The metric grows log-linearly in radial index. A smooth correction
-% vanishing at the ends fits an integer interval count. Rejoin at the
-% first original node whose transition satisfies the geometric ratio.
-base=diff(r);
-baseRatio=max(base(2:end)./base(1:end-1),base(1:end-1)./base(2:end));
-first=max([find(r>rampStart,1);find(baseRatio>=ratioLimit,1,'last')+1]);
-for join=first:numel(r)
-    span=r(join)-rampStart;
-    logChange=log(dr(join)/h);
-    average=h;
-    if logChange~=0,average=h*expm1(logChange)/logChange;end
-    cells=round(span/average);
-    if cells<6,continue;end
-    t=(0:2*cells)'/(2*cells);
-    metric=h*exp(logChange*t);
-    taper=6*t.*(1-t);
-    initial=integrate_cells(metric);
-    correction=integrate_cells(metric.*taper);
-    metric=metric.*(1+(span-sum(initial))/sum(correction)*taper);
-    if any(metric<=0),continue;end
-    ramp=rampStart+cumsum(integrate_cells(metric));
-    ramp(end)=[];
-    joinRows=join:min(join+1,numel(r));
-    steps=diff([uniform;ramp;r(joinRows)]);
-    adjacent=steps(2:end)./steps(1:end-1);
-    maxRatio=max([adjacent;1./adjacent]);
-    if maxRatio<ratioLimit-.005
-        fullRatio=max([maxRatio;baseRatio(join:end)]);
-        endRadius=r(join);
-        r=[uniform;ramp;r(join:end)];
-        dr=[h*ones(size(uniform));metric(3:2:end-2);dr(join:end)];
-        break
-    end
+if ~isempty(requestedNr)
+    % Fit the requested number of intervals to the same six-cell seam and
+    % outer endpoint. The log-metric ramp has zero slope at the seam.
+    [r,dr,maxRatio]=radial_budget(uniform,h,r(end),requestedNr);
+    fullRatio=maxRatio;
+    endRadius=r(end);
+else
+    [r,dr,maxRatio,fullRatio,endRadius]=join_radial(r,dr,uniform,h,ratioLimit);
 end
-assert(exist('endRadius','var')==1,'ipm_cr:StaircaseRadius', ...
-    'The original radial axis has no compatible transition at the requested spacing ratio.');
 ratio=h./cartesianStep;
 info=struct('uniformActiveCells',uniformCells,'innerActiveRadius',inner, ...
     'baseRadialStep',baseStep,'radialStep',h,'medianCoreRadialStep',median(cartesianStep), ...
@@ -778,6 +784,78 @@ info=struct('uniformActiveCells',uniformCells,'innerActiveRadius',inner, ...
     'adjacentStepRatioLimit',ratioLimit, ...
     'transitionEndRadius',endRadius, ...
     'coreStepAtAngle',cartesianStep(:).','angles',angle(:).');
+end
+
+function [r,dr,localRatio,wholeRatio,endRadius]=join_radial(baseR,baseDr,prefix,h,target)
+% Keep the first good geometric join at the target when available. Over
+% target, use the positive transition with the smallest whole-axis ratio.
+rampStart=prefix(end);
+steps=diff(baseR);
+adjacent=steps(2:end)./steps(1:end-1);
+suffixRatio=flipud(cummax(flipud([max(adjacent,1./adjacent);1;1])));
+first=find(baseR>rampStart,1);
+r=[];dr=[];wholeRatio=Inf;
+margin=min(.005,.05*(target-1));
+if ~isempty(first)
+    for join=first:numel(baseR)
+        span=baseR(join)-rampStart;
+        logChange=log(baseDr(join)/h);
+        average=h;
+        if logChange~=0,average=h*expm1(logChange)/logChange;end
+        cells=round(span/average);
+        if cells<6,continue;end
+        t=(0:2*cells)'/(2*cells);
+        metric=h*exp(logChange*t);
+        taper=6*t.*(1-t);
+        initial=integrate_cells(metric);
+        correction=integrate_cells(metric.*taper);
+        metric=metric.*(1+(span-sum(initial))/sum(correction)*taper);
+        if any(~isfinite(metric)|metric<=0),continue;end
+        ramp=rampStart+cumsum(integrate_cells(metric));
+        ramp(end)=[];
+        nearSteps=diff([prefix;ramp;baseR(join:min(join+1,numel(baseR)))]);
+        if any(nearSteps<=0),continue;end
+        adjacent=nearSteps(2:end)./nearSteps(1:end-1);
+        ratio=max([adjacent;1./adjacent]);
+        totalRatio=max(ratio,suffixRatio(join));
+        atTarget=ratio<target-margin&&suffixRatio(join)<target;
+        if atTarget||totalRatio<wholeRatio
+            r=[prefix;ramp;baseR(join:end)];
+            dr=[h*ones(size(prefix));metric(3:2:end-2);baseDr(join:end)];
+            localRatio=ratio;wholeRatio=totalRatio;endRadius=baseR(join);
+        end
+        if atTarget,break;end
+    end
+end
+assert(~isempty(r),'ipm_cr:StaircaseRadius', ...
+    'The radial axis must admit a positive transition between the interface band and the outer grid.');
+end
+
+function [r,dr,maxRatio]=radial_budget(prefix,h,outer,nr)
+cells=nr-numel(prefix);span=outer-prefix(end);
+assert(cells>=1&&span>0,'ipm_cr:MeshRadialBudget', ...
+    'nr must leave cells beyond the ghost rows and six uniform interface cells.');
+z=(0:2*cells)'/2;
+shoulder=min(12,.15*cells);t=min(1,z/shoulder);
+ramp=shoulder*t.^3.*(1-.5*t)+max(0,z-shoulder);
+spanInSteps=span/h;
+% The seam endpoint contributes one sixth of its step to the first cell.
+% Bracket the metric fit from the physical span and count alone.
+assert(isfinite(spanInSteps)&&spanInSteps>1/6,'ipm_cr:MeshRadialBudget', ...
+    'The space beyond the interface band must support a positive radial transition.');
+lower=min(0,log((spanInSteps-1/6)/cells)/ramp(2));
+upper=(log(max(1,spanInSteps))+log(12))/ramp(end);
+distance=@(slope) sum(integrate_cells(exp(slope*ramp)));
+slope=fzero(@(q) distance(q)-spanInSteps,[lower,upper]);
+metric=h*exp(slope*ramp);
+r=[prefix;prefix(end)+cumsum(integrate_cells(metric))];
+r(end)=outer;
+dr=[h*ones(size(prefix));metric(3:2:end)];
+steps=diff(r);
+assert(all(steps>0)&&all(isfinite(dr)&dr>0),'ipm_cr:MeshRadialBudget', ...
+    'The radial budget must produce strictly increasing nodes and positive finite metrics.');
+ratios=steps(2:end)./steps(1:end-1);
+maxRatio=max([ratios;1./ratios]);
 end
 
 function step=integrate_cells(metric)

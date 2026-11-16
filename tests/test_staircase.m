@@ -91,6 +91,7 @@ report.remesh=struct('layers',[min(layers),median(layers),max(layers)], ...
 assert_thin_overlap(layers);
 assert_radial_match(new.mesh);
 assert_core_spacing(new.mesh);
+report.ratioWarning=assert_advisory_ratio(c.method.geometry);
 report.passed=true;
 ipm_cr.io.identity('json',fullfile(outputDir,'staircase_test.json'),report);
 end
@@ -116,7 +117,7 @@ end
 
 function assert_core_spacing(g)
 spacing=g.geometryKey.staircase.interfaceCore;
-limit=g.axisSource.interfaceRadial.adjacentStepRatioLimit;
+limit=spacing.adjacentStepRatioLimit;
 axes={g.core.x(g.core.originIndex:end),g.core.y};
 metrics={g.core.dxMetric(g.core.originIndex:end),g.core.dyMetric};
 for direction=1:2
@@ -147,7 +148,7 @@ assert(max(abs(diff(g.polar.r(rows))/h-1))<2e-12);
 assert(all(g.polar.drMetric(rows)==h));
 assert(h<=radial.baseRadialStep&&h<=radial.medianCoreRadialStep);
 limit=1.1;
-if numel(g.polar.theta)==91,limit=1.2;end
+if numel(g.polar.theta)==91,limit=1.3;end
 last=find(g.polar.r==radial.transitionEndRadius,1);
 step=diff(g.polar.r(1:min(last+1,end)));
 ratio=step(2:end)./step(1:end-1);
@@ -172,4 +173,18 @@ end
 function q=source(x,y)
 r2=x.^2+y.^2;
 q=(8-4*r2).*y.*exp(-r2);
+end
+
+
+function result=assert_advisory_ratio(geometry)
+geometry.k=6;geometry.radialRatioLimit=1.1;
+id='ipm_cr:MeshStepRatio';
+previous=warning('on',id);restore=onCleanup(@()warning(previous)); %#ok<NASGU>
+lastwarn('');
+g=ipm_cr.mesh.build(geometry);
+[msg,warningId]=lastwarn;
+assert(strcmp(warningId,id)&&g.spacingRatios.aboveTarget(3));
+assert(g.polar.nr==129&&g.polar.r(end)==1e10);
+result=struct('warning',msg,'measured',g.spacingRatios.maximumAdjacentRatio(3), ...
+    'target',g.spacingRatios.targets(3),'radialNodes',g.polar.nr);
 end

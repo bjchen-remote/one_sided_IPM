@@ -132,6 +132,29 @@ classdef interpolate
             values=apply_map(fields,map);
         end
 
+        function plan=wallPlan(g,map)
+            % Retain the wall sampling stencil and the active donors of its ghost nodes.
+            e=g.exchange;
+            [map.core,map.coreAnchor,c]=compact_sample(map.core,map.coreAnchor);
+            [map.polar,map.polarAnchor,p]=compact_sample(map.polar,map.polarAnchor);
+            ca=wall_ghosts(c,e.coreGhostIndices,e.coreDifferencePlan,e.polarDonorIndices);
+            pa=wall_ghosts(p,e.polarGhostIndices,e.polarDifferencePlan,e.coreDonorIndices);
+            [cx,~,ci]=unique([c;pa.columns;pa.anchor]);
+            [px,~,pi]=unique([p;ca.columns;ca.anchor]);
+            [cc,pa.columns,pa.anchor]=partition_indices(ci,numel(c),numel(pa.columns));
+            [pc,ca.columns,ca.anchor]=partition_indices(pi,numel(p),numel(ca.columns));
+            plan=struct('map',map,'sites',struct('core',c,'polar',p), ...
+                'nodes',struct('core',cx,'polar',px),'core',ca,'polar',pa, ...
+                'coreSample',cc,'polarSample',pc);
+        end
+
+        function sampled=wallExchange(values,plan)
+            % Exchange only the ghost rows used by the wall map.
+            sampled=struct('core',values.core(plan.coreSample),'polar',values.polar(plan.polarSample));
+            sampled.core=wall_ghost_values(sampled.core,values.polar,plan.core);
+            sampled.polar=wall_ghost_values(sampled.polar,values.core,plan.polar);
+        end
+
         function D = metricDerivative(axis,derivativeOrder,stencilWidth)
             %IPM.MESH.FDMATRIX Local-polynomial finite-difference matrix on any monotone axis.
             %   D = IPM.MESH.FDMATRIX(X,M,WIDTH) differentiates nodal data M times.  Every
@@ -184,6 +207,33 @@ classdef interpolate
             D = sparse(rows,columns,values,numberOfNodes,numberOfNodes);
         end
     end
+end
+
+function [M,anchor,sites]=compact_sample(M,anchor)
+[~,columns]=find(M);
+sites=unique([columns;anchor(anchor>0)]);
+M=M(:,sites);
+[~,anchor]=ismember(anchor,sites);
+end
+
+function plan=wall_ghosts(sites,ghosts,full,donors)
+[isGhost,position]=ismember(sites,ghosts);
+rows=position(isGhost);
+[keep,localRow]=ismember(full.row,rows);
+plan=struct('targets',find(isGhost),'row',localRow(keep), ...
+    'columns',donors(full.column(keep)),'anchor',donors(full.anchor(rows)), ...
+    'sum',full.sum(rows,keep));
+end
+
+function [sample,columns,anchor]=partition_indices(index,sampleCount,columnCount)
+sample=index(1:sampleCount);
+columns=index(sampleCount+(1:columnCount));
+anchor=index(sampleCount+columnCount+1:end);
+end
+
+function data=wall_ghost_values(data,values,plan)
+anchor=values(plan.anchor);
+data(plan.targets)=anchor+plan.sum*(values(plan.columns)-anchor(plan.row));
 end
 
 function value=apply_map(fields,map)

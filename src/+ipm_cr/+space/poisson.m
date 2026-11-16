@@ -97,20 +97,20 @@ classdef poisson < handle
             end
             Fp(end,:)=Fp(end,:)+load.';
             sourceSeconds=toc(phase);phase=tic;
-            [pa0,~]=obj.polar_solve(Fp,zeros(1,numel(p.jj)));
+            modalRhs=Fp(:,p.jj)*p.V;
+            [pa0,~]=obj.polar_solve(Fp,zeros(1,numel(p.jj)),modalRhs);
             cc0=obj.core_solve(Fc,obj.coupling.RCA*pa0(:));
             b=obj.coupling.RAC*cc0(:);lambda=obj.coupling.factor\b;
-            [pa,~]=obj.polar_solve(Fp,lambda.');
-            cc=obj.core_solve(Fc,obj.coupling.RCA*pa(:));
-            if isfield(c,'traceLoad'),Fc=Fc+reshape(c.traceLoad*(obj.coupling.RCA*pa(:)),size(Fc));end
+            [pa,~]=obj.polar_solve(Fp,lambda.',modalRhs);
+            coreTrace=obj.coupling.RCA*pa(:);
+            [cc,Fc]=obj.core_solve(Fc,coreTrace);
             coreBackward=weak_backward(c.A,cc,Fc,c.free);
             polarBackward=weak_backward(p.A,pa,Fp,p.free);backward=max(coreBackward,polarBackward);
             inner=p.innerTraceEval*pa(1,p.jj).';
             trace=max(norm(obj.coupling.RAC*cc(:)-lambda,inf),norm(inner-lambda,inf));
             if ~isfield(c,'traceLoad')
-                target=obj.coupling.RCA*pa(:);
                 ccNodes=c.yAxis.E*cc*c.xAxis.E.';
-                trace=max(trace,norm(target-ccNodes(c.traceIndex),inf));
+                trace=max(trace,norm(coreTrace-ccNodes(c.traceIndex),inf));
             end
             essential=max([max(abs(cc(1,:))),max(abs(pa(:,[1,end])),[],'all'), ...
                 norm(inner-lambda,inf)]);
@@ -158,7 +158,7 @@ classdef poisson < handle
                 'complexityScope','sparse core, banded radial modes, dense angular transforms and trace Schur solve');
             info.finiteOutput=finite_flow(flow);
             if isfield(c,'traceLoad')
-                info.coreWeakTraceMismatch=norm(c.traceEval*cc(:)-obj.coupling.RCA*pa(:),inf);
+                info.coreWeakTraceMismatch=norm(c.traceEval*cc(:)-coreTrace,inf);
             end
         end
 
@@ -171,7 +171,7 @@ classdef poisson < handle
             a=ipm_cr.space.velocity.evaluate(obj.auditMaps.core,flow.coefficients.core);
             b=ipm_cr.space.velocity.evaluate(obj.auditMaps.polar,flow.coefficients.polar);
         end
-        function U=core_solve(obj,F,trace)
+        function [U,F]=core_solve(obj,F,trace)
             c=obj.c;U=zeros(c.ny,c.nx);
             if isfield(c,'traceLoad')
                 F=F+reshape(c.traceLoad*trace,size(F));
@@ -184,14 +184,15 @@ classdef poisson < handle
             end
             U=weak_solve(c.A,c.factor,U,F,c.free);
         end
-        function [U,Z]=polar_solve(obj,F,inner)
+        function [U,Z]=polar_solve(obj,F,inner,modalRhs)
             p=obj.p;
             inner=(p.innerTraceFit\inner(:)).';
-            rhs=F(:,p.jj)*p.V;inner=inner*p.M*p.V;
+            if nargin<4,modalRhs=F(:,p.jj)*p.V;end
+            inner=inner*p.M*p.V;
             Z=zeros(p.nr,numel(p.mu));
             for j=1:numel(p.mu)
                 A=p.operators{j};z=zeros(p.nr,1);z(1)=inner(j);
-                b=rhs(:,j)-A*z;f=p.radialFree;z(f)=p.factors{j}\b(f);
+                b=modalRhs(:,j)-A*z;f=p.radialFree;z(f)=p.factors{j}\b(f);
                 Z(:,j)=z;
             end
             U=zeros(p.nr,p.nt);U(:,p.jj)=Z*p.V.';
@@ -246,8 +247,10 @@ function f=cholesky_factor(A)
 diagonal=diag(A);assert(all(isfinite(diagonal))&&all(diagonal>0), ...
     'ipm_cr:FEMCholesky','FEM free weak rows require positive finite diagonal entries.');
 scale=1./sqrt(diagonal);D=spdiags(scale,0,numel(scale),numel(scale));
-B=D*((A+A')/2)*D;order=symamd(B);L=chol(B(order,order),'lower');
-f=struct('L',L,'order',order(:),'scale',scale);
+B=D*((A+A')/2)*D;
+% Retain the sparse Cholesky solver, including its internal ordering and
+% solve workspace. Repeated backslashes on an exported L rebuild that work.
+f=struct('solver',decomposition(B,'chol','lower'),'scale',scale);
 end
 function T=spline_trace_response(c,p,toCore,toPolar)
 % Batch harmonic responses. Only retain the trace Schur matrix.
@@ -261,7 +264,7 @@ load=c.traceLoad(c.free,:)*polarTrace;
 T=(toPolar(:,c.free)*cholesky_solve(c.factor,load))*mode;
 end
 function x=cholesky_solve(f,b)
-rhs=f.scale.*b;x=zeros(size(b));x(f.order,:)=f.L'\(f.L\rhs(f.order,:));x=f.scale.*x;
+x=f.scale.*(f.solver\(f.scale.*b));
 end
 function U=weak_solve(A,f,U,F,free)
 r=F(:)-A*U(:);U(free)=cholesky_solve(f,r(free));
@@ -279,10 +282,12 @@ end
 Z=Z+delta;U(:,p.jj)=Z*p.V.';
 end
 function s=factor_storage(obj)
-f=obj.c.factor;bytes=whos('f');radialMass=obj.p.sourceMass;
+radialMass=obj.p.sourceMass;
 a=obj.p.operators;b=obj.p.factors;v=obj.p.V;h=obj.p.harmonic;
 modal=whos('a','b','v','h');load=whos('radialMass');
-s=struct('patchFactorNnz',nnz(f.L),'patchFactorBytes',bytes.bytes, ...
+s=struct('patchFactorNnz',NaN,'patchFactorBytes',NaN, ...
+    'patchFactorStorageMeasured',false,'patchFactorRepresentation','cached_sparse_cholesky_decomposition', ...
+    'patchFactorStorageScope','MATLAB does not expose internal factor storage; measure process memory separately', ...
     'traceDimension',size(obj.coupling.S,1),'dtNMatrixIncludedInSparseOperator',true, ...
     'polarModalPlanBytes',sum([modal.bytes]),'sourceLoadCacheBytes',load.bytes);
 if isfield(obj.c,'sourceMass')

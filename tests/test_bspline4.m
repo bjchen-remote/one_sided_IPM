@@ -23,6 +23,7 @@ for j=1:numel(n)
         'value',@(x,y) 2*(1-R^2)*y.*exp(-R^2));
     [v,info]=solver.solve(@source,imposed);
     [f,vx,vy,reference,q,qRate]=manufactured(g);
+    if j==1,check_wall_probe(g,axes,f);end
     d=ipm_cr.space.basis.gradient(f,g,axes);
     op=ipm_cr.space.transport(f,g,axes);
     a=op(vx,vy);
@@ -61,6 +62,29 @@ if ~isfolder(output),mkdir(output);end
 ipm_cr.io.identity('json',fullfile(output,'bspline4.json'),report);
 assert(report.passed,'ipm_cr:SplineManufacturedOrder', ...
     'The coupled or individual fine-pair order missed its target.');
+end
+
+function check_wall_probe(g,axes,f)
+wallX=linspace(-2.5,2.5,141);
+[~,map]=ipm_cr.mesh.interpolate.sample(f,g,wallX,zeros(size(wallX)));
+wall=ipm_cr.mesh.interpolate.wallPlan(g,map);
+assert(any([wall.core.targets;wall.polar.targets]),'ipm_cr:WallProbeGhostCoverage');
+[full,local]=ipm_cr.space.transport(f,g,axes,wall.nodes);
+vx=struct();vy=struct();localX=struct();localY=struct();
+for patch={'core','polar'}
+    key=patch{1};p=g.(key);idx=wall.nodes.(key);
+    vx.(key)=sin(p.X+.23);vy.(key)=.31*cos(p.X-p.Y);
+    localX.(key)=vx.(key)(idx);localY.(key)=vy.(key)(idx);
+end
+wide=full(vx,vy,struct('cfl',false,'partials',true));
+[b,partials]=local(localX,localY);
+reference={wide.B,wide.partials.c_l,wide.partials.delta};
+compact={b,partials.c_l,partials.delta};
+for k=1:numel(reference)
+    old=ipm_cr.mesh.interpolate.sample(ipm_cr.mesh.exchange(reference{k},g),map);
+    new=ipm_cr.mesh.interpolate.sample(ipm_cr.mesh.interpolate.wallExchange(compact{k},wall),wall.map);
+    assert(isequal(old,new),'ipm_cr:WallProbeEquivalence');
+end
 end
 
 function [errors,where]=coupled_error(g,axes,solver,boundary)

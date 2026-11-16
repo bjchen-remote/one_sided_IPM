@@ -1,4 +1,4 @@
-function prepared=transport(rho,g,a)
+function [prepared,probe]=transport(rho,g,a,sites)
 %PREPARE Freeze spatial reconstruction for one RHS only.
 % RESULT=PREPARED(VX,VY,REQUEST) returns named B/rate/position/partials.
 % REQUEST defaults to cfl=true, partials=false; no output-count dispatch.
@@ -26,6 +26,35 @@ dtMetric=p.r(:);
 xSpacing=axis_spacing(c.x).';ySpacing=axis_spacing(c.y);
 radialSpacing=p.r(:).*axis_spacing(a.t.nodes);
 prepared=@apply;
+
+probe=[];
+if nargin>=4
+    ix=sites.core;ir=sites.polar;
+    coreNormal=mod(ix-1,c.ny)==0;
+    polarColumn=floor((ir-1)/nr)+1;
+    polarWall=polarColumn==1|polarColumn==nt;
+    probeCo=reshape(co(polarColumn),[],1);probeSi=reshape(si(polarColumn),[],1);
+    probeR=p.r(mod(ir-1,nr)+1);
+    probeX=pair_at(coreX,ix);
+    probeY=pair_at(coreY,transpose_index(ix,c.ny,c.nx));
+    probeRadial=pair_at(polarRadialOut,transpose_index(ir,nr,nt));
+    probeTheta=pair_at(polarTheta,ir);
+    probe=@wall_probe;
+end
+
+    function [B,partials]=wall_probe(vx,vy)
+        uy=vy.core;uy(coreNormal)=0;
+        py=vy.polar;py(polarWall)=0;
+        vr=vx.polar.*probeCo+py.*probeSi;
+        angular=(-vx.polar.*probeSi+py.*probeCo)./probeR;
+        angular(polarWall)=0;
+        B=struct('core',advection(vx.core,probeX)+advection(uy,probeY), ...
+            'polar',advection(vr,probeRadial)./probeR+advection(angular,probeTheta));
+        dx=selected(vx.core,probeX);dy=selected(uy,probeY);
+        dr=selected(vr,probeRadial)./probeR;da=selected(angular,probeTheta);
+        partials=struct('c_l',struct('core',-c.X(ix).*dx-c.Y(ix).*dy,'polar',-probeR.*dr), ...
+            'delta',struct('core',-dx,'polar',-probeCo.*dr+probeSi.*da./probeR));
+    end
 
     function result=apply(vx,vy,request)
         if nargin<3,request=struct();end
@@ -94,6 +123,14 @@ prepared=@apply;
         result=struct('B',B,'rate',rate,'position',position,'partials',partials, ...
             'outerBoundary',outer);
     end
+end
+
+function pair=pair_at(pair,index)
+pair=struct('plus',pair.plus(index),'minus',pair.minus(index));
+end
+
+function index=transpose_index(index,rows,columns)
+index=floor((index-1)/rows)+1+columns*mod(index-1,rows);
 end
 
 function pair=spline_pair(axis,field)

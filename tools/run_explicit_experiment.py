@@ -13,7 +13,7 @@ import signal
 import subprocess
 import sys
 import time
-from common import (atomic, available_memory, freeze, initial_input, matlab_executable,
+from common import (atomic, available_memory, freeze, initial_input, matlab_executable, mex_extension,
                     now, process_rss, quote, relative_file, require_kernel, source_files,
                     sha, stop_child, verify_snapshot)
 
@@ -92,6 +92,30 @@ def verify_frozen(folder, mission, frozen, expected_options):
         raise RuntimeError('Frozen seed file differs from its declared SHA256')
 
 
+def check_threads(threads):
+    if type(threads) is not int or threads < 1:
+        raise ValueError('MATLAB thread count must be a positive integer')
+    limits = [len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1)]
+    for key in ('SLURM_CPUS_PER_TASK', 'PBS_NCPUS'):
+        if os.environ.get(key):
+            limits.append(int(os.environ[key]))
+    available = min(limits)
+    if threads > available:
+        raise RuntimeError(f'Requested {threads} MATLAB threads but this allocation exposes {available} CPUs')
+
+
+def build_kernel(folder, matlab):
+    runtime = folder / 'runtime'
+    cmd = ("restoredefaultpath;addpath('" + quote(runtime / 'tools') +
+           "');build_ipm_cr_native('" + quote(folder / 'native_build') + "');")
+    with (folder / 'native_build.log').open('x') as log:
+        subprocess.run([matlab, '-singleCompThread', '-batch', cmd],
+                       stdout=log, stderr=subprocess.STDOUT, check=True, timeout=300)
+    require_kernel(runtime)
+    binary = Path('src/+ipm_cr/+mesh/sampleMex' + mex_extension())
+    return binary.as_posix(), sha(runtime / binary)
+
+
 def prepare(folder, args):
     option_file = args.case
     options = read_options(option_file)
@@ -106,36 +130,53 @@ def prepare(folder, args):
     authority = initial_input(ROOT, initial)
     inputs = source_files(ROOT) + [initial_input(ROOT), authority, relative_file(ROOT, initial),
                                    Path('tools/common.py'), Path('tools/run_explicit_experiment.py')]
-    if not args.prepare_only:
+    if args.build_native:
+        inputs.append(Path('tools/build_ipm_cr_native.m'))
+    elif not args.prepare_only:
         require_kernel(ROOT)
     folder.mkdir(parents=True, exist_ok=False)
     inventory = freeze(ROOT, folder / 'runtime', inputs)
     initial_input(folder / 'runtime', initial)
     seed = freeze_seed(folder, options)
+    mission = dict(
+        kind='ipm_cr_frozen_run_v2', createdUtc=now(), targetTau=args.target,
+        segmentSeconds=args.segment_seconds, threads=args.threads,
+        rssLimitBytes=4 * 1024**3, minimumFreeDiskBytes=8 * 1024**3,
+        matlab=args.matlab, initial=initial, seedInput=seed,
+        timeIntegrator='rk4',
+        timeControl='initial_rate_CFL_formula_stage_rates_observed',
+        timePartition='ordinary_original_IPC_cubic_spline_knots_fixed_four_secant',
+        implicitStages=0, polarOriginPresent=False, trajectoryAccuracyCertified=False,
+        options=options, segments=[])
+    mission_file = folder / 'mission.json'
+    if args.build_native:
+        mission.update(status='building_native', sourceFrozen=False)
+        atomic(mission_file, mission)
+        try:
+            binary, digest = build_kernel(folder, args.matlab)
+            inventory[binary] = digest
+            verify_snapshot(folder / 'runtime', inventory)
+        except Exception as error:
+            mission.update(status='native_build_failed', error=repr(error), updatedUtc=now())
+            atomic(mission_file, mission)
+            raise
     atomic(folder / 'source_inventory.json', inventory)
     atomic(folder / 'explicit_options.json', options)
     # Options are immutable input, independent of mutable mission/progress records.
     atomic(folder / 'options_identity.json', {'sha256': sha(folder / 'explicit_options.json')})
     deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=args.hours)
-    atomic(folder / 'mission.json', dict(
-        kind='ipm_cr_frozen_run_v2', status='prepared', targetTau=args.target,
-        createdUtc=now(), deadlineUtc=deadline.isoformat(), segmentSeconds=args.segment_seconds,
-        threads=1, rssLimitBytes=4 * 1024**3, minimumFreeDiskBytes=8 * 1024**3,
-        matlab=args.matlab, sourceFrozen=True,
-        initial=initial, seedInput=seed,
-        timeIntegrator='rk4',
-        timeControl='initial_rate_CFL_formula_stage_rates_observed',
-        timePartition='ordinary_original_IPC_cubic_spline_knots_fixed_four_secant',
-        implicitStages=0, polarOriginPresent=False, trajectoryAccuracyCertified=False,
-        options=options, segments=[]))
+    mission.update(status='prepared', sourceFrozen=True, deadlineUtc=deadline.isoformat())
+    atomic(mission_file, mission)
 
 
-def dispatch(folder, matlab):
+def dispatch(folder, matlab, foreground=False):
     entry = folder / 'runtime/tools/run_explicit_experiment.py'
+    command = [sys.executable, '-B', str(entry), '_supervise', '--output', str(folder), '--matlab', matlab]
+    if foreground:
+        print(json.dumps(dict(output=str(folder), supervisorPid=os.getpid())), flush=True)
+        os.execv(sys.executable, command)
     with (folder / 'supervisor.log').open('ab') as log:
-        child = subprocess.Popen([sys.executable, str(entry), '_supervise', '--output', str(folder),
-                                  '--matlab', matlab], stdout=log, stderr=subprocess.STDOUT,
-                                 start_new_session=True)
+        child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     print(json.dumps(dict(output=str(folder), supervisorPid=child.pid)), flush=True)
 
 
@@ -149,6 +190,15 @@ def supervise(folder, matlab):
         mission = json.loads((folder / 'mission.json').read_text())
         if mission.get('kind') != 'ipm_cr_frozen_run_v2':
             raise RuntimeError('Resume requires this v2 frozen run protocol')
+        if mission['status'] == 'target_reached':
+            return
+        if not mission.get('sourceFrozen'):
+            raise RuntimeError('Run preparation did not finish; inspect native_build.log and start a new run')
+        threads = mission['threads']
+        check_threads(threads)
+        matlab_options = ['-singleCompThread'] if threads == 1 else []
+        thread_env = dict(os.environ, OMP_NUM_THREADS=str(threads),
+                          OPENBLAS_NUM_THREADS=str(threads), MKL_NUM_THREADS=str(threads))
         expected_options = json.loads((folder / 'options_identity.json').read_text())['sha256']
         frozen = json.loads((folder / 'source_inventory.json').read_text())
         verify_frozen(folder, mission, frozen, expected_options)
@@ -183,10 +233,10 @@ def supervise(folder, matlab):
                     "opts.run.outputDir='" + quote(native) + "';opts.run.tauEnd=" + repr(mission['targetTau']) + ";\n"
                     "opts.run.wallSeconds=" + repr(min(mission['segmentSeconds'], max(0.001, (deadline-dt.datetime.now(dt.timezone.utc)).total_seconds()))) + ";\n")
                 script.write_text(
-                    "restoredefaultpath;maxNumCompThreads(1);\n"
+                    "restoredefaultpath;\n"
                     "addpath('" + quote(folder / 'runtime/src') + "');\n"
                     + invocation +
-                    "summary=ipm_cr.run(opts);disp(summary.status);\n")
+                    f"summary=ipm_cr.run(opts,{threads});disp(summary.status);\n")
                 entry = dict(index=index, startedUtc=now(), maximumRssBytes=0)
                 mission['segments'].append(entry)
                 mission.update(status='running', supervisorPid=os.getpid(), updatedUtc=now())
@@ -194,9 +244,9 @@ def supervise(folder, matlab):
                 segment_started = time.monotonic()
                 reason = None
                 with (folder / ('segment_%05d.log' % index)).open('xb') as log:
-                    child = subprocess.Popen([matlab, '-singleCompThread', '-batch', "run('" + quote(script) + "')"],
+                    child = subprocess.Popen([matlab, *matlab_options, '-batch', "run('" + quote(script) + "')"],
                                              stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-                                             env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+                                             env=thread_env)
                     mission['matlabPid'] = child.pid
                     while child.poll() is None:
                         entry['maximumRssBytes'] = max(entry['maximumRssBytes'], process_rss(child.pid))
@@ -260,6 +310,9 @@ def supervise(folder, matlab):
             mission.update(updatedUtc=now(), invocationSupervisorWallSeconds=time.monotonic() - started,
                            supervisorWallSeconds=previous_wall + time.monotonic() - started)
             atomic(folder / 'mission.json', mission)
+        if mission['status'] in {'numerical_or_runtime_failure', 'segment_timeout', 'memory_budget', 'disk_budget'}:
+            raise SystemExit(1)
+        print(json.dumps(dict(status=mission['status'], tau=mission.get('tau'), output=str(folder))), flush=True)
 
 
 def main():
@@ -271,10 +324,17 @@ def main():
     parser.add_argument('--target', type=float)
     parser.add_argument('--hours', type=float)
     parser.add_argument('--segment-seconds', type=float, default=600)
+    parser.add_argument('--threads', type=int, help='MATLAB computation threads for a new run (default: 1)')
+    parser.add_argument('--foreground', action='store_true', help='Keep the supervisor in the scheduler job')
+    parser.add_argument('--build-native', action='store_true', help='Compile the platform MEX in the new run')
     parser.add_argument('--prepare-only', action='store_true')
     args = parser.parse_args()
     if args.prepare_only and args.action != 'start':
         parser.error('--prepare-only is only valid with start')
+    if (args.threads is not None or args.build_native) and args.action != 'start':
+        parser.error('--threads and --build-native apply to new runs')
+    if args.build_native and args.prepare_only:
+        parser.error('--build-native requires an executing run')
     case_run = {}
     if args.case:
         case = read_options(args.case)
@@ -295,19 +355,26 @@ def main():
         if not all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) and v>0
                    for v in (args.target,args.hours,args.segment_seconds)):
             parser.error('Target and budgets must be positive')
+        args.threads = 1 if args.threads is None else args.threads
+        if args.threads < 1:
+            parser.error('--threads must be positive')
         if not args.prepare_only:
+            try:
+                check_threads(args.threads)
+            except (ValueError, RuntimeError) as error:
+                parser.error(str(error))
             args.matlab = matlab_executable(args.matlab)
         prepare(folder, args)
         if args.prepare_only:
             print(json.dumps(dict(status='prepared', output=str(folder), dispatched=False)))
         else:
-            dispatch(folder, args.matlab)
+            dispatch(folder, args.matlab, args.foreground)
     elif args.action == 'resume':
         if (folder / 'STOP').exists() or (folder / 'native/STOP').exists():
             raise RuntimeError('Remove the requested STOP before resuming')
         mission = json.loads((folder / 'mission.json').read_text())
         executable = matlab_executable(args.matlab or mission.get('matlab'))
-        dispatch(folder, executable)
+        dispatch(folder, executable, args.foreground)
     elif args.action == '_supervise':
         supervise(folder, matlab_executable(args.matlab))
     else:

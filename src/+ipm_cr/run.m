@@ -1,9 +1,12 @@
-function [summary,state,ctx]=run(overrides)
+function [summary,state,ctx]=run(overrides,threads)
 %RUN Accepted-only, resumable explicit hybrid trajectory using the public API.
 % Use config('case') or a JSON case filename. Stops occur at accepted
 % endpoints. The canonical-time target is an exact cap,
 % while physical-time thresholds report any accepted-step overshoot.
+% THREADS is a MATLAB execution limit, independent of the numerical case.
 if nargin<1,overrides=ipm_cr.config('case');end
+if nargin<2,threads=1;end
+validateattributes(threads,{'numeric'},{'scalar','real','finite','integer','positive'});
 if ischar(overrides)||isstring(overrides),overrides=jsondecode(fileread(overrides));end
 root=ipm_cr.io.identity('root');
 [opts,resolved,requested]=ipm_cr.config(overrides,'run');folder=opts.outputDir;
@@ -13,7 +16,10 @@ assert(~isempty(lock),'ipm_cr:ExplicitRunnerOwner','This output folder already h
 ownerCleanup=onCleanup(@()release_owner(lock,channel,file)); %#ok<NASGU>
 logfid=fopen(fullfile(folder,'run.log'),'a');assert(logfid>=0,'ipm_cr:ExplicitRunnerLog');
 logCleanup=onCleanup(@()fclose(logfid)); %#ok<NASGU>
-threads=maxNumCompThreads(1);threadCleanup=onCleanup(@()maxNumCompThreads(threads)); %#ok<NASGU>
+previousThreads=maxNumCompThreads(threads);
+threadCleanup=onCleanup(@()maxNumCompThreads(previousThreads)); %#ok<NASGU>
+effectiveThreads=maxNumCompThreads;
+assert(effectiveThreads==threads,'ipm_cr:RunThreads','MATLAB configured %d threads, requested %d.',effectiveThreads,threads);
 timer=tic;state=[];ctx=[];g=[];wallOps=[];method=[];pointer=[];priorWall=0;
 auditHistory=struct([]);remeshHistory=struct([]);
 
@@ -21,14 +27,14 @@ historyColumns=ipm_cr.io.history('columns');history=zeros(0,numel(historyColumns
 manifest=struct([]);authority=struct();
 summary=struct('kind','ipm_cr_run_v2','status','initializing', ...
     'outputDir',folder,'targetTau',opts.tauEnd,'startedUtc',ipm_cr.io.identity('utc'), ...
-    'timeIntegrator','rk4','cflStepFormulaApplied',true,'threads',1, ...
+    'timeIntegrator','rk4','cflStepFormulaApplied',true,'threads',effectiveThreads, ...
     'runControls',opts,'steadyStateCertified',false, ...
     'matlabVersion',version,'computer',computer,'sourceInventory',manifest, ...
     'authority',authority,'trajectoryAccuracyCertified',false, ...
     'gaugeResidualHistoryScope','Maximum over all complete RK stages and accepted endpoint, with initial endpoint included.', ...
     'timingScope','MATLAB invocation initialization, direct complete explicit steps, checkpoint readback/SHA, history and output; external MATLAB startup is excluded.', ...
     'strongResidualScope','Native-array source reconstruction has no independent off-grid strong PDE audit unless the returned solver explicitly supplies one.');
-logline('START targetTau=%.17g wallSeconds=%.3f folder=%s',opts.tauEnd,opts.wallSeconds,folder);
+logline('START targetTau=%.17g wallSeconds=%.3f threads=%d folder=%s',opts.tauEnd,opts.wallSeconds,effectiveThreads,folder);
 try
     manifest=ipm_cr.io.identity('source');summary.sourceInventory=manifest;
     cursor=fullfile(folder,'latest.json');

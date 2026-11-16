@@ -10,7 +10,7 @@ assert(isstruct(options)&&isscalar(options),'ipm_cr:ExplicitGeometry', ...
     'Geometry options must be a scalar structure.');
 allowed={'grid','coreHalfWidth','coreHeight','coreSpacing','polarStart', ...
     'ghostWidth','interpolationWidth','radialRedistribution','coreMap','preset','axes', ...
-    'staircase','coreAllocation','staircaseFine','interfaceAllocation','corePlateauIntervals'};
+    'staircase','coreAllocation','staircaseFine','interfaceAllocation','corePlateauIntervals','nodeCounts','radialRatioLimit','k'};
 assert(all(ismember(fieldnames(options),allowed)),'ipm_cr:ExplicitGeometry', ...
     'An unknown explicit transport geometry option was supplied.');
 timer=tic;
@@ -26,13 +26,41 @@ assert((~staircase||explicit)&&(staircase||~fine),'ipm_cr:StaircaseAxes', ...
     'Use a nonuniform preset or explicit axes for the staircase.');
 assert(staircase||~isfield(options,'corePlateauIntervals'),'ipm_cr:StaircaseAxes', ...
     'Core spacing intervals are only used on the staircase.');
+nodeCounts=option(options,'nodeCounts',struct());
+assert(isstruct(nodeCounts)&&isscalar(nodeCounts)&& ...
+    all(ismember(fieldnames(nodeCounts),{'nx','ny','nr','ntheta'})), ...
+    'ipm_cr:MeshNodeCounts','Use nx, ny, nr and ntheta for custom staircase counts.');
+radialLimit=option(options,'radialRatioLimit',[]);
+if isfield(options,'k')
+    assert(isempty(fieldnames(nodeCounts)),'ipm_cr:MeshLevel', ...
+        'Choose k or individual values in nodeCounts.');
+    [nodeCounts,levelLimit]=level_counts(options.k);
+    if isempty(radialLimit),radialLimit=levelLimit;end
+end
+for name=fieldnames(nodeCounts).'
+    validateattributes(nodeCounts.(name{1}),{'double'},{'real','scalar','finite','integer','>=',7});
+end
+assert(staircase||isempty(fieldnames(nodeCounts)),'ipm_cr:MeshNodeCounts', ...
+    'Custom node counts use the nonuniform staircase geometry.');
+requestedNr=option(nodeCounts,'nr',[]);
+if ~isempty(radialLimit)
+    assert(staircase,'ipm_cr:MeshRadialRatio','A custom radial ratio applies to the staircase.');
+    validateattributes(radialLimit,{'double'},{'real','scalar','finite','>',1});
+end
 if explicit
     [axes,axisSource]=explicit_axes(options,staircase);
+    if isfield(options,'k'),axisSource.k=options.k;end
     if isfield(options,'interfaceAllocation')
         assert(staircase&&~fine,'ipm_cr:StudyGeometry','This allocation study uses the thin staircase.');
         [moved,axisSource.interfaceAllocation]=ipm_cr.mesh.axes.allocate( ...
             axes,options.interfaceAllocation,halo);
         [axes,~]=explicit_axes(struct('axes',moved),true);
+    end
+    if ~isempty(fieldnames(nodeCounts))
+        axisSource.nodeCounts=nodeCounts;
+        axisSource.referenceTheta=axes.theta;
+        axes=ipm_cr.mesh.axes.staircase('resize',axes,nodeCounts);
+        [axes,~]=explicit_axes(struct('axes',axes),true);
     end
     if staircase&&(isfield(options,'preset')||isfield(options,'corePlateauIntervals'))
         if isfield(options,'corePlateauIntervals')
@@ -44,6 +72,9 @@ if explicit
         end
         [moved,axisSource.interfaceCore]=ipm_cr.mesh.axes.staircase('interfaceCore',axes,halo,counts);
         [axes,~]=explicit_axes(struct('axes',moved),true);
+    end
+    if isfield(nodeCounts,'ntheta')
+        axes.theta=linspace(0,pi,nodeCounts.ntheta);
     end
     x=axes.x;y=axes.y;intervalX=numel(x)-1;intervalY=numel(y)-1;
     a=x(end);height=y(end);mapped=true;
@@ -122,12 +153,17 @@ if explicit
         assert(isscalar(first)&&first>=1,'ipm_cr:StaircaseRadius', ...
             'The supplied annular axis must reach inside the Cartesian donor bounds.');
         second=r(first+halo+1);
-        xp=x(core.originIndex:end).';angle=theta(:);
+        xp=x(core.originIndex:end).';
+        angle=option(axisSource,'referenceTheta',theta).';
         ratioLimit=1.1;
-        if numel(theta)==91
+        if numel(angle)==91
             % Use the same directions to measure the staircase cut on both grids.
             angle=linspace(0,pi,181).';
-            ratioLimit=1.2;
+            ratioLimit=1.3;
+        end
+        if ~isempty(radialLimit)
+            ratioLimit=radialLimit;
+            axisSource.radialRatioLimit=radialLimit;
         end
         i=discretize(min(xp(end),second*abs(cos(angle))),xp);
         j=discretize(min(y(end),second*sin(angle)),y);
@@ -136,7 +172,7 @@ if explicit
         % so the staircase rounding costs about two active rows per ray.
         cover=max(r(first+halo),median(hypot(xp(i),y(j))))+16*eps(max(1,second));
         [r,drMetric,axisSource.interfaceRadial]=ipm_cr.mesh.axes.staircase( ...
-            'matchRadial',r,drMetric,core,cover,angle,halo,ratioLimit);
+            'matchRadial',r,drMetric,core,cover,angle,halo,ratioLimit,requestedNr);
         % The seven-point physical derivative defines the active mask.
         core=ipm_cr.mesh.staircase('build',core,cover,halo,7);
         active=core.active;
@@ -259,6 +295,9 @@ if staircase
         g.geometryKey.staircase.interfaceCore=rmfield(axisSource.interfaceCore,'referenceAxes');
     end
     g.geometryKey.physicalDerivativeClosure='staircase_active_line_D7';
+    coreTarget=1.1+.1*double(numel(option(axisSource,'referenceTheta',theta))==91);
+    if isfield(axisSource,'k')&&axisSource.k==7,coreTarget=1.15;end
+    g.spacingRatios=spacing_ratio_report({x,y,r,theta},coreTarget,ratioLimit);
 end
 if redistribute
     redistributionInfo.annularFirstFullIndex=first;
@@ -350,6 +389,38 @@ a.mapParameters=struct('originMetricSpacing', ...
     'averagePhysicalSpacing',[2*a.x(end)/(counts(1)-1),a.y(end)/(counts(2)-1)], ...
     'logicalSpacing',[a.dxi,a.deta],'logicalBounds',[-1,1,0,1], ...
     'definition','supplied_positive_metric_step_equals_J_times_logical_spacing');
+end
+
+function report=spacing_ratio_report(axes,coreTarget,radialTarget)
+% Theta is uniform by construction. Report its measured ratio alongside the
+% three graded axes, for which the configured targets are advisory.
+directions={'X1','X2','r','theta'};
+targets=[coreTarget,coreTarget,radialTarget,Inf];
+ratios=ones(size(targets));
+for k=1:numel(axes)
+    steps=diff(axes{k}(:));
+    adjacent=steps(2:end)./steps(1:end-1);
+    ratios(k)=max([1;adjacent;1./adjacent]);
+end
+over=ratios>targets;
+report=struct('directions',{directions},'maximumAdjacentRatio',ratios, ...
+    'targets',targets,'aboveTarget',over);
+if any(over)
+    messages=arrayfun(@(k) sprintf('%s %.6g (target %.6g)', ...
+        directions{k},ratios(k),targets(k)),find(over),'UniformOutput',false);
+    warning('ipm_cr:MeshStepRatio','Adjacent mesh step ratio above target: %s.',strjoin(messages,', '));
+end
+end
+
+function [counts,radialLimit]=level_counts(k)
+% k>=5 gives an integral angular interval count. Above 51 the Cartesian
+% node count 2^(k+1)+1 cannot be represented exactly as a double.
+validateattributes(k,{'double'},{'real','scalar','finite','integer','>=',5,'<=',51});
+n=2^k;
+counts=struct('nx',2*n+1,'ny',n+1,'nr',2*n+1,'ntheta',90*2^(k-6)+1);
+radialLimit=1.1;
+if k<=6,radialLimit=1.3;end
+if k==7,radialLimit=1.15;end
 end
 
 function value=option(s,name,fallback)

@@ -22,3 +22,5 @@ python3 tools/run_explicit_experiment.py start --case examples/bspline4.json --o
 监督器以本机采样 MEX 和源文件制作冻结运行时，记录实际网格、运行时段及退出原因。运行中在监督目录放置 `STOP` 可在已完成的步端点暂停。移除 `STOP` 后用 `resume --output <原目录>` 恢复，保留原截止时间。更换方法、初值或实际网格使用新目录。显式 seed 通过 `case.run.seed.file/sha256/tau` 声明，`tau` 必须是源检查点的真实时间。
 
 `latest.json` 指向当前接受 MAT 和 SHA。`initial.mat/json` 保存实际起态。`mesh/` 保存换网格事件。`history.csv` 及 `data/` 保存残差历史和原生数据。 `F=W_\tau`，`Q=q_\tau`。原生数据包含规范尺度和四字物理时钟。
+
+CHESS 的 16 CPU 作业使用 [server 入口](../server/README.md)，每次新计算使用自己的冻结运行目录。
